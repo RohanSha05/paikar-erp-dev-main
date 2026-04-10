@@ -30,3 +30,4 @@ export const updateCustomerSchema = z.object({
       message: 'At least one field is required'
     })
 });
+// updated
