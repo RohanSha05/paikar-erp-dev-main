@@ -30,6 +30,36 @@ async function main() {
     create: { code: 'AC-PAYABLES', name: 'Payables', type: 'liability' }
   });
 
+  await prisma.account.upsert({
+    where: { code: 'AC-CASH' },
+    update: {},
+    create: { code: 'AC-CASH', name: 'Cash', type: 'cash' }
+  });
+
+  await prisma.account.upsert({
+    where: { code: 'AC-BANK' },
+    update: {},
+    create: { code: 'AC-BANK', name: 'Bank', type: 'bank' }
+  });
+
+  await prisma.account.upsert({
+    where: { code: 'AC-EXP' },
+    update: {},
+    create: { code: 'AC-EXP', name: 'Expenses', type: 'expense' }
+  });
+
+  await prisma.account.upsert({
+    where: { code: 'AC-TRANSPORT' },
+    update: {},
+    create: { code: 'AC-TRANSPORT', name: 'Transport Expense', type: 'transport' }
+  });
+
+  await prisma.account.upsert({
+    where: { code: 'AC-ROUND' },
+    update: {},
+    create: { code: 'AC-ROUND', name: 'Rounding Difference', type: 'income' }
+  });
+
   await prisma.warehouse.upsert({
     where: { code: 'WH-1' },
     update: {},
