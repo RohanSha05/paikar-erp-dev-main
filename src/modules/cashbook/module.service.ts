@@ -2,11 +2,97 @@ import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import type {
   AccountDto,
+  CreatePartyInput,
   PartyDto,
   VoucherDto,
   CreateVoucherInput,
   VoucherRowInput,
 } from './module.types';
+
+function slugify(value: string) {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+}
+
+function normalizePartyType(input: string) {
+  const value = input.trim().toUpperCase();
+  if (value === 'SELLER') return 'SELLER';
+  if (value === 'CUSTOMER') return 'CUSTOMER';
+  if (value === 'MILL') return 'MILL';
+  if (value === 'DRIVER') return 'DRIVER';
+  if (value === 'INVESTOR') return 'INVESTOR';
+  if (value === 'EMPLOYEE') return 'EMPLOYEE';
+  return 'OTHER';
+}
+
+async function generatePartyCode(type: string, name: string) {
+  const prefix = slugify(type).slice(0, 4) || 'PRTY';
+  const base = slugify(name) || 'PARTY';
+
+  for (let i = 0; i < 5; i += 1) {
+    const code = `${prefix}-${base}-${Date.now().toString().slice(-5)}${i}`.slice(0, 40);
+    const exists = await prisma.party.findUnique({ where: { code } });
+    if (!exists) return code;
+  }
+
+  return `${prefix}-${base}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+}
+
+/**
+ * Create a party in Party table.
+ */
+export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
+  const name = input.name.trim();
+  if (!name) {
+    throw new HttpError(400, 'Party name is required');
+  }
+
+  const type = normalizePartyType(input.type);
+
+  const existing = await prisma.party.findFirst({
+    where: {
+      active: true,
+      type: type as any,
+      name: {
+        equals: name,
+        mode: 'insensitive',
+      },
+    },
+  });
+
+  if (existing) {
+    return {
+      id: existing.id,
+      code: existing.code,
+      name: existing.name,
+      type: existing.type.toLowerCase(),
+      active: existing.active,
+    };
+  }
+
+  const code = await generatePartyCode(type, name);
+
+  const created = await prisma.party.create({
+    data: {
+      code,
+      name,
+      type: type as any,
+      active: true,
+    },
+  });
+
+  return {
+    id: created.id,
+    code: created.code,
+    name: created.name,
+    type: created.type.toLowerCase(),
+    active: created.active,
+  };
+}
 
 /**
  * List all active parties from Party table, optionally filtered by type.

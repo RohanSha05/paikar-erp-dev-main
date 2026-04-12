@@ -7,10 +7,17 @@ export const voucherRowSchema = z.object({
   memo: z.string().optional(),
 });
 
+export const createPartySchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(2, { message: 'Party name is required' }),
+    type: z.enum(['seller', 'customer', 'mill', 'driver', 'investor', 'employee', 'other']),
+  }),
+});
+
 export const createVoucherSchema = z.object({
   body: z.object({
     vtype: z.enum(['payment', 'receipt', 'journal', 'contra'], {
-      errorMap: () => ({ message: 'Invalid voucher type' }),
+      message: 'Invalid voucher type',
     }),
     vdate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, {
       message: 'Date must be in YYYY-MM-DD format',

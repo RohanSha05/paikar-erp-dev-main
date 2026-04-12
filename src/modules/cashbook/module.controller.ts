@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import {
   listAccounts,
+  createParty,
   listParties,
   resolvePartyAccount,
   createVoucher,
@@ -23,6 +24,28 @@ export async function getParties(
     res.json({
       success: true,
       data: parties,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/v1/cashbook/parties
+ * Create a party
+ */
+export async function createPartyHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const party = await createParty(req.body);
+
+    res.status(201).json({
+      success: true,
+      data: party,
+      message: 'Party created successfully',
     });
   } catch (error) {
     next(error);

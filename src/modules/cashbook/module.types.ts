@@ -20,6 +20,11 @@ export interface PartyDto {
   accountId?: string;
 }
 
+export interface CreatePartyInput {
+  name: string;
+  type: string;
+}
+
 export interface VoucherRowInput {
   accountId: string;
   dr?: number;

@@ -53,6 +53,8 @@ enum PartyType {
   SELLER
   MILL
   DRIVER
+  INVESTOR
+  EMPLOYEE
   OTHER
 }
 

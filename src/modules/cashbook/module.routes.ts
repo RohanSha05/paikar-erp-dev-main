@@ -2,13 +2,14 @@ import { Router } from 'express';
 import {
   getAccounts,
   getParties,
+  createPartyHandler,
   resolvePartyAccountHandler,
   createVoucherHandler,
   getVouchers,
 } from './module.controller';
 import { requireAuth } from '../../common/middleware/auth';
 import { validate } from '../../common/middleware/validate';
-import { createVoucherSchema } from './module.validator';
+import { createPartySchema, createVoucherSchema } from './module.validator';
 
 const router = Router();
 
@@ -17,6 +18,12 @@ const router = Router();
  * List all party accounts
  */
 router.get('/parties', requireAuth, getParties);
+
+/**
+ * POST /api/v1/cashbook/parties
+ * Create party
+ */
+router.post('/parties', requireAuth, validate(createPartySchema), createPartyHandler);
 
 /**
  * POST /api/v1/cashbook/parties/:partyId/account
