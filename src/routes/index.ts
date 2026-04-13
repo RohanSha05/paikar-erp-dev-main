@@ -14,6 +14,7 @@ import warehouseRoutes from '../modules/warehouses/module.routes';
 import accountingRoutes from '../modules/accounting/module.routes';
 import recurringRoutes from '../modules/recurring/module.routes';
 import cashbookRoutes from '../modules/cashbook/module.routes';
+import investorRoutes from '../modules/investors/module.routes';
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use('/warehouses', warehouseRoutes);
 router.use('/accounting', accountingRoutes);
 router.use('/recurring', recurringRoutes);
 router.use('/cashbook', cashbookRoutes);
+router.use('/investors', investorRoutes);
 
 export default router;
