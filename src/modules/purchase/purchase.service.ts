@@ -29,8 +29,70 @@ function lotLabel(poNoValue: string, productId: string, warehouseId: string) {
   return `LOT-${poNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}`;
 }
 
+function numberValue(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function computePurchaseTotals(order: any) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  let totalBags = 0;
+  let basePurchase = 0;
+
+  for (const item of items) {
+    const bags = numberValue(item?.bagCount);
+    const actualKg = bags * numberValue(item?.actualKgPerBag);
+    const accountingKg = bags * numberValue(item?.accountingKgPerBag);
+    const stockKg = item?.weightPolicy === 'actual' ? actualKg : accountingKg;
+    const lineRatePerKg = ratePerKg(item?.rateBasis as 'perKg' | 'perMon', numberValue(item?.rateValue));
+
+    totalBags += bags;
+    basePurchase += stockKg * lineRatePerKg;
+  }
+
+  const bagCostMode = order?.bagCostMode || 'paid';
+  const bagCostPerBag = numberValue(order?.bagCostPerBag);
+  const bagCostTotal = bagCostMode === 'self' ? 0 : totalBags * bagCostPerBag;
+  const extraCosts =
+    numberValue(order?.transport) +
+    numberValue(order?.loadingUnloading ?? order?.loading) +
+    numberValue(order?.misc) +
+    bagCostTotal;
+  const totalCost = basePurchase + extraCosts;
+
+  return {
+    totalBags,
+    basePurchase,
+    bagCostTotal,
+    extraCosts,
+    totalCost,
+  };
+}
+
+function toPurchaseOrderDto(order: any) {
+  const totals = computePurchaseTotals(order);
+  return {
+    ...order,
+    sellerSnapshot: order?.seller
+      ? {
+          id: order.seller.id,
+          name: order.seller.name,
+          address: order.seller.address,
+          district: order.seller.district,
+          market: order.seller.market,
+          phone: order.seller.phone,
+        }
+      : order?.sellerSnapshot,
+    totals: {
+      ...(order?.totals || {}),
+      ...totals,
+    },
+    totalCost: totals.totalCost,
+  };
+}
+
 export async function listPurchaseOrders() {
-  return prisma.purchaseOrder.findMany({
+  const orders = await prisma.purchaseOrder.findMany({
     include: {
       seller: true,
       warehouse: true,
@@ -38,6 +100,8 @@ export async function listPurchaseOrders() {
     },
     orderBy: { createdAt: 'desc' }
   });
+
+  return orders.map((order) => toPurchaseOrderDto(order));
 }
 
 export async function getPurchaseOrderById(id: string) {
@@ -54,7 +118,7 @@ export async function getPurchaseOrderById(id: string) {
     throw new HttpError(404, 'Purchase order not found');
   }
 
-  return order;
+  return toPurchaseOrderDto(order);
 }
 
 export async function createDraft(input: CreatePurchaseOrderDraftInput) {

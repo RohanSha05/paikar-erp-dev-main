@@ -153,14 +153,16 @@ export async function getLedger(accountId: string, from?: string, to?: string): 
 	const openingDate = from ? new Date(`${from}T00:00:00Z`) : undefined;
 	const closingDate = to ? new Date(`${to}T23:59:59Z`) : undefined;
 
-	const openingVouchers = await prisma.voucher.findMany({
-		where: openingDate ? { vdate: { lt: openingDate } } : undefined,
-		include: {
-			rows: {
-				where: { accountId },
-			},
-		},
-	});
+	const openingVouchers = openingDate
+		? await prisma.voucher.findMany({
+				where: { vdate: { lt: openingDate } },
+				include: {
+					rows: {
+						where: { accountId },
+					},
+				},
+		  })
+		: [];
 
 	const opening = toNumber(account.opening) + openingVouchers.reduce((sum, voucher) => {
 		return sum + voucher.rows.reduce((rowSum, row) => rowSum + toNumber(row.dr) - toNumber(row.cr), 0);
