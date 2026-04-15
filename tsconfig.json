@@ -1,9 +1,12 @@
 {
+  "include": ["src/**/*.ts"],
+  "exclude": ["prisma", "dist", "node_modules"],
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES6",
     "module": "CommonJS",
     "rootDir": "src",
     "outDir": "dist",
-    "strict": true
+    "strict": true,
+    "esModuleInterop": true
   }
 }

@@ -87,7 +87,7 @@ export async function createInvestorTxn(data: {
       id,
       investorId: data.investorId,
       kind: data.kind,
-      date: data.date,
+      date: new Date(data.date),
       amount: data.amount,
       instrument: data.instrument,
       memo: data.memo,

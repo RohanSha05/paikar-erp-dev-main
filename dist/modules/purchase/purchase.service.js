@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.listPurchaseOrders = listPurchaseOrders;
+exports.getPurchaseOrderById = getPurchaseOrderById;
 exports.createDraft = createDraft;
+exports.updatePurchaseOrderDraft = updatePurchaseOrderDraft;
 exports.approvePurchaseOrder = approvePurchaseOrder;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
@@ -21,6 +24,88 @@ function voucherNo() {
 function poNo() {
     return `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 }
+function lotLabel(poNoValue, productId, warehouseId) {
+    return `LOT-${poNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}`;
+}
+function numberValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+function computePurchaseTotals(order) {
+    const items = Array.isArray(order?.items) ? order.items : [];
+    let totalBags = 0;
+    let basePurchase = 0;
+    for (const item of items) {
+        const bags = numberValue(item?.bagCount);
+        const actualKg = bags * numberValue(item?.actualKgPerBag);
+        const accountingKg = bags * numberValue(item?.accountingKgPerBag);
+        const stockKg = item?.weightPolicy === 'actual' ? actualKg : accountingKg;
+        const lineRatePerKg = ratePerKg(item?.rateBasis, numberValue(item?.rateValue));
+        totalBags += bags;
+        basePurchase += stockKg * lineRatePerKg;
+    }
+    const bagCostMode = order?.bagCostMode || 'paid';
+    const bagCostPerBag = numberValue(order?.bagCostPerBag);
+    const bagCostTotal = bagCostMode === 'self' ? 0 : totalBags * bagCostPerBag;
+    const extraCosts = numberValue(order?.transport) +
+        numberValue(order?.loadingUnloading ?? order?.loading) +
+        numberValue(order?.misc) +
+        bagCostTotal;
+    const totalCost = basePurchase + extraCosts;
+    return {
+        totalBags,
+        basePurchase,
+        bagCostTotal,
+        extraCosts,
+        totalCost,
+    };
+}
+function toPurchaseOrderDto(order) {
+    const totals = computePurchaseTotals(order);
+    return {
+        ...order,
+        sellerSnapshot: order?.seller
+            ? {
+                id: order.seller.id,
+                name: order.seller.name,
+                address: order.seller.address,
+                district: order.seller.district,
+                market: order.seller.market,
+                phone: order.seller.phone,
+            }
+            : order?.sellerSnapshot,
+        totals: {
+            ...(order?.totals || {}),
+            ...totals,
+        },
+        totalCost: totals.totalCost,
+    };
+}
+async function listPurchaseOrders() {
+    const orders = await prisma_1.prisma.purchaseOrder.findMany({
+        include: {
+            seller: true,
+            warehouse: true,
+            items: true
+        },
+        orderBy: { createdAt: 'desc' }
+    });
+    return orders.map((order) => toPurchaseOrderDto(order));
+}
+async function getPurchaseOrderById(id) {
+    const order = await prisma_1.prisma.purchaseOrder.findUnique({
+        where: { id },
+        include: {
+            seller: true,
+            warehouse: true,
+            items: true
+        }
+    });
+    if (!order) {
+        throw new httpError_1.HttpError(404, 'Purchase order not found');
+    }
+    return toPurchaseOrderDto(order);
+}
 async function createDraft(input) {
     const seller = await prisma_1.prisma.seller.findUnique({ where: { id: input.sellerId } });
     if (!seller)
@@ -36,48 +121,108 @@ async function createDraft(input) {
             sellerId: input.sellerId,
             warehouseId: input.warehouseId,
             transport: new client_1.Prisma.Decimal(input.transport),
-            loading: new client_1.Prisma.Decimal(input.loading ?? input.loadingUnloading ?? 0),
-            loadingUnloading: new client_1.Prisma.Decimal(input.loadingUnloading ?? input.loading ?? 0),
+            loading: new client_1.Prisma.Decimal(input.loading),
+            loadingUnloading: new client_1.Prisma.Decimal(input.loadingUnloading),
             misc: new client_1.Prisma.Decimal(input.misc),
             bagCostMode: input.bagCostMode,
             bagCostPerBag: new client_1.Prisma.Decimal(input.bagCostPerBag),
             remarks: input.remarks,
-            productType: input.productType,
+            productType: input.items[0]?.productType,
             varietyNote: input.varietyNote,
-            destinationType: input.destinationType,
-            destinationRefId: input.destinationRefId,
+            destinationType: input.destinationRef?.type ?? input.destinationKind,
+            destinationRefId: input.destinationRef?.id,
             destinationKind: input.destinationKind,
-            destinationWarehouseId: input.destinationWarehouseId,
-            destinationCustomerId: input.destinationCustomerId,
-            advancePaid: input.advancePaid !== undefined ? new client_1.Prisma.Decimal(input.advancePaid) : undefined,
-            advanceInstrumentId: input.advanceInstrumentId,
+            destinationWarehouseId: input.destinationWarehouseId ?? undefined,
+            destinationCustomerId: input.destinationCustomerId ?? undefined,
             transportMode: input.transportMode,
             driverId: input.driverId,
             driverName: input.driverName,
             truckNo: input.truckNo,
             route: input.route,
-            driverTripId: input.driverTripId,
             items: {
                 create: input.items.map((x) => ({
-                    lineId: x.lineId,
                     productId: x.productId,
-                    productName: x.productName,
+                    productName: x.productType,
                     bagCount: x.bagCount,
                     actualKgPerBag: new client_1.Prisma.Decimal(x.actualKgPerBag),
                     accountingKgPerBag: new client_1.Prisma.Decimal(x.accountingKgPerBag),
                     weightPolicy: x.weightPolicy,
                     rateBasis: x.rateBasis,
                     rateValue: new client_1.Prisma.Decimal(x.rateValue),
-                    transportMode: x.transportMode,
-                    transportCost: x.transportCost !== undefined ? new client_1.Prisma.Decimal(x.transportCost) : undefined,
-                    loadingUnloading: x.loadingUnloading !== undefined ? new client_1.Prisma.Decimal(x.loadingUnloading) : undefined,
-                    misc: x.misc !== undefined ? new client_1.Prisma.Decimal(x.misc) : undefined,
-                    destinationType: x.destinationType,
-                    destinationRefId: x.destinationRefId
                 }))
             }
         },
         include: { items: true }
+    });
+}
+async function updatePurchaseOrderDraft(id, input) {
+    return prisma_1.prisma.$transaction(async (tx) => {
+        const existing = await tx.purchaseOrder.findUnique({
+            where: { id },
+            include: { items: true }
+        });
+        if (!existing) {
+            throw new httpError_1.HttpError(404, 'Purchase order not found');
+        }
+        if (existing.status !== 'DRAFT') {
+            throw new httpError_1.HttpError(409, 'Only draft PO can be edited');
+        }
+        const seller = await tx.seller.findUnique({ where: { id: input.sellerId } });
+        if (!seller)
+            throw new httpError_1.HttpError(404, 'Seller not found');
+        const warehouse = await tx.warehouse.findUnique({ where: { id: input.warehouseId } });
+        if (!warehouse)
+            throw new httpError_1.HttpError(404, 'Warehouse not found');
+        await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
+        const updated = await tx.purchaseOrder.update({
+            where: { id },
+            data: {
+                purchaseType: input.purchaseType,
+                sellerId: input.sellerId,
+                warehouseId: input.warehouseId,
+                transport: new client_1.Prisma.Decimal(input.transport),
+                loading: new client_1.Prisma.Decimal(input.loading),
+                loadingUnloading: new client_1.Prisma.Decimal(input.loadingUnloading),
+                misc: new client_1.Prisma.Decimal(input.misc),
+                bagCostMode: input.bagCostMode,
+                bagCostPerBag: new client_1.Prisma.Decimal(input.bagCostPerBag),
+                remarks: input.remarks,
+                productType: input.items[0]?.productType,
+                varietyNote: input.varietyNote,
+                destinationType: input.destinationRef?.type ?? input.destinationKind,
+                destinationRefId: input.destinationRef?.id,
+                destinationKind: input.destinationKind,
+                destinationWarehouseId: input.destinationWarehouseId ?? undefined,
+                destinationCustomerId: input.destinationCustomerId ?? undefined,
+                transportMode: input.transportMode,
+                driverId: input.driverId,
+                driverName: input.driverName,
+                truckNo: input.truckNo,
+                route: input.route,
+                items: {
+                    create: input.items.map((x) => ({
+                        productId: x.productId,
+                        productName: x.productType,
+                        bagCount: x.bagCount,
+                        actualKgPerBag: new client_1.Prisma.Decimal(x.actualKgPerBag),
+                        accountingKgPerBag: new client_1.Prisma.Decimal(x.accountingKgPerBag),
+                        weightPolicy: x.weightPolicy,
+                        rateBasis: x.rateBasis,
+                        rateValue: new client_1.Prisma.Decimal(x.rateValue)
+                    }))
+                }
+            },
+            include: {
+                seller: true,
+                warehouse: true,
+                items: true
+            }
+        });
+        return {
+            success: true,
+            message: 'Purchase order draft updated',
+            data: updated
+        };
     });
 }
 async function approvePurchaseOrder(id) {
@@ -99,7 +244,8 @@ async function approvePurchaseOrder(id) {
         let totalBags = 0;
         let basePurchase = 0;
         let totalStockKg = 0;
-        const bagCostPerBag = po.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
+        const poExtended = po;
+        const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
         for (const item of po.items) {
             const actual = Number(item.actualKgPerBag) * item.bagCount;
             const accounting = Number(item.accountingKgPerBag) * item.bagCount;
@@ -114,11 +260,13 @@ async function approvePurchaseOrder(id) {
             const lot = await tx.lot.create({
                 data: {
                     lotNo: lotNo(),
+                    label: lotLabel(po.poNo, item.productId, po.warehouseId),
                     productId: item.productId,
                     warehouseId: po.warehouseId,
                     availableKg: new client_1.Prisma.Decimal(stockKg),
                     avgCostPerKg: new client_1.Prisma.Decimal(avgCostPerKg),
-                    sourcePoId: po.id
+                    sourcePoId: po.id,
+                    sourcePoItemId: item.id
                 }
             });
             await tx.stockMove.create({
@@ -127,13 +275,13 @@ async function approvePurchaseOrder(id) {
                     lotId: lot.id,
                     warehouseId: po.warehouseId,
                     qtyKg: new client_1.Prisma.Decimal(stockKg),
-                    reason: 'purchase',
+                    reason: 'PURCHASE',
                     refType: 'PO',
                     refId: po.id
                 }
             });
         }
-        const headerLoading = Number(po.loadingUnloading ?? po.loading);
+        const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
         const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
         const totalCost = basePurchase + extraCosts;
         const inventoryAccount = await tx.account.findUnique({ where: { code: 'AC-INVENTORY' } });

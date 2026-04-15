@@ -1,27 +1,27 @@
 export interface Investor {
   id: string;
   name: string;
-  phone?: string;
-  address?: string;
-  nidNo?: string;
-  photoUrl?: string;
-  agreementPct?: number;
-  notes?: string;
+  phone: string | null;
+  address: string | null;
+  nidNo: string | null;
+  photoUrl: string | null;
+  agreementPct: number | null;
+  notes: string | null;
   active: boolean;
-  createdAt: string;
-  updatedAt?: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface InvestorTxn {
   id: string;
   investorId: string;
-  kind: 'capitalIn' | 'capitalOut' | 'profitPay' | 'adjustment' | 'payout';
-  date: string;
+  kind: string;
+  date: Date;
   amount: number;
-  instrument?: string;
-  memo?: string;
-  voucherId?: string;
-  createdAt: string;
+  instrument: string | null;
+  memo: string | null;
+  voucherId: string | null;
+  createdAt: Date;
 }
 
 export interface InvestorBalance {
