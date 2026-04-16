@@ -17,21 +17,29 @@ export async function createInvestor(data: {
   phone?: string;
   address?: string;
   nidNo?: string;
+  nid?: string;
+  nomineeName?: string;
+  startDate?: string;
   photoUrl?: string;
   agreementPct?: number;
+  profitSharePct?: number;
   notes?: string;
   active?: boolean;
 }): Promise<Investor> {
   const id = uid('INV');
+  const effectiveNidNo = data.nidNo ?? data.nid;
+  const effectiveAgreementPct = data.agreementPct ?? data.profitSharePct;
   return prisma.investor.create({
     data: {
       id,
       name: data.name,
       phone: data.phone,
       address: data.address,
-      nidNo: data.nidNo,
+      nidNo: effectiveNidNo,
+      nomineeName: data.nomineeName,
+      startDate: data.startDate ? new Date(data.startDate) : undefined,
       photoUrl: data.photoUrl,
-      agreementPct: data.agreementPct,
+      agreementPct: effectiveAgreementPct,
       notes: data.notes,
       active: data.active ?? true,
     },
@@ -39,15 +47,30 @@ export async function createInvestor(data: {
 }
 
 export async function updateInvestor(id: string, data: Partial<Investor>): Promise<Investor | null> {
+  const anyData = data as Partial<Investor> & {
+    nid?: string;
+    profitSharePct?: number;
+    startDate?: string | Date | null;
+  };
+
+  const effectiveNidNo = data.nidNo ?? anyData.nid;
+  const effectiveAgreementPct = data.agreementPct ?? anyData.profitSharePct;
+  const effectiveStartDate =
+    typeof anyData.startDate === 'string'
+      ? new Date(anyData.startDate)
+      : anyData.startDate;
+
   return prisma.investor.update({
     where: { id },
     data: {
       name: data.name,
       phone: data.phone,
       address: data.address,
-      nidNo: data.nidNo,
+      nidNo: effectiveNidNo,
+      nomineeName: data.nomineeName,
+      startDate: effectiveStartDate,
       photoUrl: data.photoUrl,
-      agreementPct: data.agreementPct,
+      agreementPct: effectiveAgreementPct,
       notes: data.notes,
       active: data.active,
       updatedAt: new Date(),

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updatePartySchema = exports.createPartySchema = void 0;
+exports.deletePartySchema = exports.updatePartySchema = exports.createPartySchema = void 0;
 const zod_1 = require("zod");
 exports.createPartySchema = zod_1.z.object({
     body: zod_1.z.object({
@@ -23,5 +23,10 @@ exports.updatePartySchema = zod_1.z.object({
     })
         .refine((data) => Object.keys(data).length > 0, {
         message: 'At least one field is required'
+    })
+});
+exports.deletePartySchema = zod_1.z.object({
+    params: zod_1.z.object({
+        id: zod_1.z.string().uuid()
     })
 });

@@ -1,5 +1,6 @@
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
+import { PartyType } from '@prisma/client';
 import type {
   AccountDto,
   CreatePartyInput,
@@ -18,7 +19,7 @@ function slugify(value: string) {
     .slice(0, 24);
 }
 
-function normalizePartyType(input: string) {
+function normalizePartyType(input: string): PartyType {
   const value = input.trim().toUpperCase();
   if (value === 'SELLER') return 'SELLER';
   if (value === 'CUSTOMER') return 'CUSTOMER';
@@ -56,7 +57,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
   const existing = await prisma.party.findFirst({
     where: {
       active: true,
-      type: type as any,
+      type,
       name: {
         equals: name,
         mode: 'insensitive',
@@ -80,7 +81,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
     data: {
       code,
       name,
-      type: type as any,
+      type,
       active: true,
     },
   });
@@ -101,32 +102,30 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
 export async function listParties(
   kind?: string,
 ): Promise<PartyDto[]> {
-  const type = kind ? kind.trim().toUpperCase() : undefined;
+  const type = kind ? normalizePartyType(kind) : undefined;
 
   const parties = await prisma.party.findMany({
     where: {
       active: true,
-      ...(type ? { type: type as any } : {}),
+      ...(type ? { type } : {}),
     },
     orderBy: [{ type: 'asc' }, { name: 'asc' }],
   });
 
-  const partyIds = parties.map((party) => party.id);
-  const linkedAccounts = partyIds.length
+  const partyAccountCodes = parties.map((party) => partyAccountCode(party.type, party.code));
+  const linkedAccounts = partyAccountCodes.length
     ? await prisma.account.findMany({
         where: {
           type: 'party',
-          partyRefId: { in: partyIds },
+          code: { in: partyAccountCodes },
         },
-        select: { id: true, partyRefId: true },
+        select: { id: true, code: true },
       })
     : [];
 
-  const accountByPartyId = new Map<string, string>();
+  const accountByCode = new Map<string, string>();
   for (const account of linkedAccounts) {
-    if (account.partyRefId) {
-      accountByPartyId.set(account.partyRefId, account.id);
-    }
+    accountByCode.set(account.code, account.id);
   }
 
   return parties.map((party) => ({
@@ -135,7 +134,7 @@ export async function listParties(
     name: party.name,
     type: party.type.toLowerCase(),
     active: party.active,
-    accountId: accountByPartyId.get(party.id),
+    accountId: accountByCode.get(partyAccountCode(party.type, party.code)),
   }));
 }
 
@@ -155,10 +154,11 @@ export async function resolvePartyAccount(partyId: string): Promise<AccountDto> 
     throw new HttpError(404, 'Party not found');
   }
 
+  const accountCode = partyAccountCode(party.type, party.code);
   const existing = await prisma.account.findFirst({
     where: {
       type: 'party',
-      partyRefId: party.id,
+      code: accountCode,
     },
   });
 
@@ -175,11 +175,9 @@ export async function resolvePartyAccount(partyId: string): Promise<AccountDto> 
 
   const created = await prisma.account.create({
     data: {
-      code: partyAccountCode(party.type, party.code),
+      code: accountCode,
       name: party.name,
       type: 'party',
-      partyKind: party.type.toLowerCase(),
-      partyRefId: party.id,
       opening: 0,
       active: true,
     },

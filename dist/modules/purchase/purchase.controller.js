@@ -32,6 +32,15 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.getById = getById;
@@ -39,62 +48,76 @@ exports.createDraft = createDraft;
 exports.updateDraft = updateDraft;
 exports.approve = approve;
 const service = __importStar(require("./purchase.service"));
-async function list(_req, res, next) {
-    try {
-        const orders = await service.listPurchaseOrders();
-        return res.json({
-            success: true,
-            data: orders
-        });
-    }
-    catch (error) {
-        next(error);
-    }
+function list(_req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const orders = yield service.listPurchaseOrders();
+            return res.json({
+                success: true,
+                data: orders
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 }
-async function getById(req, res, next) {
-    try {
-        const order = await service.getPurchaseOrderById(req.params.id);
-        return res.json({
-            success: true,
-            data: order
-        });
-    }
-    catch (error) {
-        next(error);
-    }
+function getById(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const order = yield service.getPurchaseOrderById(req.params.id);
+            return res.json({
+                success: true,
+                data: order
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 }
-async function createDraft(req, res, next) {
-    try {
-        const po = await service.createDraft(req.body);
-        return res.status(201).json({
-            success: true,
-            message: 'Purchase draft created',
-            data: po
-        });
-    }
-    catch (error) {
-        next(error);
-    }
+function createDraft(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const po = yield service.createDraft(req.body);
+            return res.status(201).json({
+                success: true,
+                message: 'Purchase draft created',
+                data: po
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 }
-async function updateDraft(req, res, next) {
-    try {
-        const updated = await service.updatePurchaseOrderDraft(req.params.id, req.body);
-        return res.json(updated);
-    }
-    catch (error) {
-        next(error);
-    }
+function updateDraft(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const updated = yield service.updatePurchaseOrderDraft(req.params.id, req.body);
+            return res.json({
+                success: true,
+                message: 'Purchase draft updated',
+                data: updated
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 }
-async function approve(req, res, next) {
-    try {
-        const result = await service.approvePurchaseOrder(req.params.id);
-        return res.json({
-            success: true,
-            message: 'Purchase approved',
-            data: result
-        });
-    }
-    catch (error) {
-        next(error);
-    }
+function approve(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const result = yield service.approvePurchaseOrder(req.params.id);
+            return res.json({
+                success: true,
+                message: 'Purchase approved',
+                data: result
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
 }

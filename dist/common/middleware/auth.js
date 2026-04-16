@@ -15,7 +15,7 @@ function requireAuth(req, _res, next) {
         req.authUser = payload;
         next();
     }
-    catch {
+    catch (_a) {
         throw new httpError_1.HttpError(401, 'Unauthorized');
     }
 }

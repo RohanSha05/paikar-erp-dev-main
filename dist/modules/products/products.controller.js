@@ -32,28 +32,43 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
 const service = __importStar(require("./products.service"));
-async function list(req, res) {
-    const products = await service.listProducts();
-    return res.json({ success: true, data: products });
-}
-async function create(req, res) {
-    const product = await service.createProduct(req.body);
-    return res.status(201).json({
-        success: true,
-        message: 'Product created',
-        data: product
+function list(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const products = yield service.listProducts();
+        return res.json({ success: true, data: products });
     });
 }
-async function update(req, res) {
-    const product = await service.updateProduct(req.params.id, req.body);
-    return res.json({
-        success: true,
-        message: 'Product updated',
-        data: product
+function create(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const product = yield service.createProduct(req.body);
+        return res.status(201).json({
+            success: true,
+            message: 'Product created',
+            data: product
+        });
+    });
+}
+function update(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const product = yield service.updateProduct(req.params.id, req.body);
+        return res.json({
+            success: true,
+            message: 'Product updated',
+            data: product
+        });
     });
 }

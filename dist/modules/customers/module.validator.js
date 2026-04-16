@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateCustomerSchema = exports.createCustomerSchema = void 0;
+exports.deleteCustomerSchema = exports.updateCustomerSchema = exports.createCustomerSchema = void 0;
 const zod_1 = require("zod");
 const customerTypeSchema = zod_1.z.enum(['mill', 'retailer', 'other']);
 exports.createCustomerSchema = zod_1.z.object({
@@ -30,4 +30,8 @@ exports.updateCustomerSchema = zod_1.z.object({
         message: 'At least one field is required'
     })
 });
-// updated
+exports.deleteCustomerSchema = zod_1.z.object({
+    params: zod_1.z.object({
+        id: zod_1.z.string().uuid()
+    })
+});

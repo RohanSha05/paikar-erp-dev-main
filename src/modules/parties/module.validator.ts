@@ -24,3 +24,9 @@ export const updatePartySchema = z.object({
 			message: 'At least one field is required'
 		})
 });
+
+	export const deletePartySchema = z.object({
+		params: z.object({
+			id: z.string().uuid()
+		})
+	});

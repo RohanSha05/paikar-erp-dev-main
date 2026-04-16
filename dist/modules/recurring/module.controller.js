@@ -32,6 +32,15 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
@@ -39,25 +48,35 @@ exports.update = update;
 exports.remove = remove;
 exports.post = post;
 const service = __importStar(require("./module.service"));
-async function list(_req, res) {
-    const templates = await service.listRecurringTemplates();
-    return res.json({ success: true, data: templates });
+function list(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const templates = yield service.listRecurringTemplates();
+        return res.json({ success: true, data: templates });
+    });
 }
-async function create(req, res) {
-    const template = await service.createRecurringTemplate(req.body);
-    return res.status(201).json({ success: true, message: 'Recurring template created', data: template });
+function create(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const template = yield service.createRecurringTemplate(req.body);
+        return res.status(201).json({ success: true, message: 'Recurring template created', data: template });
+    });
 }
-async function update(req, res) {
-    const template = await service.updateRecurringTemplate(req.params.id, req.body);
-    return res.json({ success: true, message: 'Recurring template updated', data: template });
+function update(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const template = yield service.updateRecurringTemplate(req.params.id, req.body);
+        return res.json({ success: true, message: 'Recurring template updated', data: template });
+    });
 }
-async function remove(req, res) {
-    await service.deleteRecurringTemplate(req.params.id);
-    return res.json({ success: true, message: 'Recurring template deleted' });
+function remove(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield service.deleteRecurringTemplate(req.params.id);
+        return res.json({ success: true, message: 'Recurring template deleted' });
+    });
 }
-async function post(req, res) {
-    const year = Number(req.query.year || new Date().getFullYear());
-    const month = Number(req.query.month || new Date().getMonth() + 1);
-    const result = await service.postRecurringTemplate(req.params.id, year, month);
-    return res.json({ success: true, message: 'Recurring template posted', data: result });
+function post(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const year = Number(req.query.year || new Date().getFullYear());
+        const month = Number(req.query.month || new Date().getMonth() + 1);
+        const result = yield service.postRecurringTemplate(req.params.id, year, month);
+        return res.json({ success: true, message: 'Recurring template posted', data: result });
+    });
 }

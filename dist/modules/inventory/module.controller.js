@@ -32,23 +32,118 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adjust = adjust;
 exports.transfer = transfer;
+exports.dashboard = dashboard;
+exports.stockCard = stockCard;
 const service = __importStar(require("./module.service"));
-async function adjust(req, res) {
-    const data = await service.adjustStock(req.body);
-    return res.json({
-        success: true,
-        message: 'Stock adjusted',
-        data
+function firstString(value) {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : undefined;
+    }
+    if (Array.isArray(value) && typeof value[0] === 'string') {
+        const trimmed = value[0].trim();
+        return trimmed.length ? trimmed : undefined;
+    }
+    return undefined;
+}
+function toPositiveInt(value, fallback) {
+    const text = firstString(value);
+    if (!text)
+        return fallback;
+    const n = Number(text);
+    return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+function toBool(value) {
+    var _a;
+    const text = (_a = firstString(value)) === null || _a === void 0 ? void 0 : _a.toLowerCase();
+    if (!text)
+        return undefined;
+    if (text === 'true' || text === '1')
+        return true;
+    if (text === 'false' || text === '0')
+        return false;
+    return undefined;
+}
+function parseDashboardQuery(query) {
+    const sortByRaw = firstString(query.sortBy);
+    const sortDirRaw = firstString(query.sortDir);
+    const sortBy = sortByRaw === 'availableKg' || sortByRaw === 'avgCostPerKg'
+        ? sortByRaw
+        : 'createdAt';
+    const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+    return {
+        q: firstString(query.q),
+        warehouseId: firstString(query.warehouseId),
+        productId: firstString(query.productId),
+        availableOnly: toBool(query.availableOnly),
+        page: toPositiveInt(query.page, 1),
+        pageSize: toPositiveInt(query.pageSize, 20),
+        sortBy,
+        sortDir,
+    };
+}
+function parseStockCardQuery(query) {
+    const sortDirRaw = firstString(query.sortDir);
+    const sortDir = sortDirRaw === 'asc' ? 'asc' : 'desc';
+    return {
+        lotId: firstString(query.lotId),
+        warehouseId: firstString(query.warehouseId),
+        from: firstString(query.from),
+        to: firstString(query.to),
+        page: toPositiveInt(query.page, 1),
+        pageSize: toPositiveInt(query.pageSize, 100),
+        sortDir,
+    };
+}
+function adjust(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.adjustStock(req.body);
+        return res.json({
+            success: true,
+            message: 'Stock adjusted',
+            data
+        });
     });
 }
-async function transfer(req, res) {
-    const data = await service.transferStock(req.body);
-    return res.json({
-        success: true,
-        message: 'Stock transferred',
-        data
+function transfer(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.transferStock(req.body);
+        return res.json({
+            success: true,
+            message: 'Stock transferred',
+            data
+        });
+    });
+}
+function dashboard(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.getInventoryDashboard(parseDashboardQuery(req.query));
+        return res.json({
+            success: true,
+            message: 'Inventory dashboard data loaded',
+            data
+        });
+    });
+}
+function stockCard(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.getStockCard(parseStockCardQuery(req.query));
+        return res.json({
+            success: true,
+            message: 'Stock card data loaded',
+            data
+        });
     });
 }

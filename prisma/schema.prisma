@@ -377,6 +377,8 @@ model Investor {
   phone         String?
   address       String?
   nidNo         String?
+  nomineeName   String?
+  startDate     DateTime?
   photoUrl      String?
   agreementPct  Float?
   notes         String?

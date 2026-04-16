@@ -32,28 +32,63 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
+exports.remove = remove;
+const httpError_1 = require("../../common/httpError");
 const service = __importStar(require("./module.service"));
-async function list(_req, res) {
-    const parties = await service.listParties();
-    return res.json({ success: true, data: parties });
-}
-async function create(req, res) {
-    const party = await service.createParty(req.body);
-    return res.status(201).json({
-        success: true,
-        message: 'Party created',
-        data: party
+function list(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const parties = yield service.listParties();
+        return res.json({ success: true, data: parties });
     });
 }
-async function update(req, res) {
-    const party = await service.updateParty(req.params.id, req.body);
-    return res.json({
-        success: true,
-        message: 'Party updated',
-        data: party
+function create(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const party = yield service.createParty(req.body);
+        return res.status(201).json({
+            success: true,
+            message: 'Party created',
+            data: party
+        });
+    });
+}
+function update(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string' || !id.trim()) {
+            throw new httpError_1.HttpError(400, 'Invalid party ID');
+        }
+        const party = yield service.updateParty(id, req.body);
+        return res.json({
+            success: true,
+            message: 'Party updated',
+            data: party
+        });
+    });
+}
+function remove(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string' || !id.trim()) {
+            throw new httpError_1.HttpError(400, 'Invalid party ID');
+        }
+        const result = yield service.deleteParty(id);
+        return res.json({
+            success: true,
+            message: 'Party deleted',
+            data: result
+        });
     });
 }

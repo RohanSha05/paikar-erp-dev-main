@@ -32,6 +32,15 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.listAccounts = listAccounts;
 exports.createAccount = createAccount;
@@ -40,43 +49,55 @@ exports.getLedger = getLedger;
 exports.getTrialBalance = getTrialBalance;
 exports.getExpenseSummary = getExpenseSummary;
 const service = __importStar(require("./module.service"));
-async function listAccounts(req, res) {
-    const accounts = await service.listAccounts(typeof req.query.type === 'string' ? req.query.type : undefined);
-    return res.json({ success: true, data: accounts });
-}
-async function createAccount(req, res) {
-    const account = await service.createAccount(req.body);
-    return res.status(201).json({
-        success: true,
-        message: 'Account created',
-        data: account,
+function listAccounts(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const accounts = yield service.listAccounts(typeof req.query.type === 'string' ? req.query.type : undefined);
+        return res.json({ success: true, data: accounts });
     });
 }
-async function getDaybook(req, res) {
-    const date = typeof req.query.date === 'string' ? req.query.date : undefined;
-    if (!date) {
-        return res.status(400).json({ success: false, message: 'date query is required' });
-    }
-    const data = await service.getDaybook(date);
-    return res.json({ success: true, data });
+function createAccount(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const account = yield service.createAccount(req.body);
+        return res.status(201).json({
+            success: true,
+            message: 'Account created',
+            data: account,
+        });
+    });
 }
-async function getLedger(req, res) {
-    const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined;
-    if (!accountId) {
-        return res.status(400).json({ success: false, message: 'accountId query is required' });
-    }
-    const from = typeof req.query.from === 'string' ? req.query.from : undefined;
-    const to = typeof req.query.to === 'string' ? req.query.to : undefined;
-    const data = await service.getLedger(accountId, from, to);
-    return res.json({ success: true, data });
+function getDaybook(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+        if (!date) {
+            return res.status(400).json({ success: false, message: 'date query is required' });
+        }
+        const data = yield service.getDaybook(date);
+        return res.json({ success: true, data });
+    });
 }
-async function getTrialBalance(_req, res) {
-    const data = await service.getTrialBalance();
-    return res.json({ success: true, data });
+function getLedger(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined;
+        if (!accountId) {
+            return res.status(400).json({ success: false, message: 'accountId query is required' });
+        }
+        const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+        const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+        const data = yield service.getLedger(accountId, from, to);
+        return res.json({ success: true, data });
+    });
 }
-async function getExpenseSummary(req, res) {
-    const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : new Date().getFullYear();
-    const year = Number.isFinite(yearValue) ? yearValue : new Date().getFullYear();
-    const data = await service.getExpenseSummary(year);
-    return res.json({ success: true, data });
+function getTrialBalance(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.getTrialBalance();
+        return res.json({ success: true, data });
+    });
+}
+function getExpenseSummary(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : new Date().getFullYear();
+        const year = Number.isFinite(yearValue) ? yearValue : new Date().getFullYear();
+        const data = yield service.getExpenseSummary(year);
+        return res.json({ success: true, data });
+    });
 }

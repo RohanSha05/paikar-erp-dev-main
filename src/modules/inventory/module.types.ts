@@ -11,3 +11,24 @@ export type TransferStockInput = {
 	qtyKg: number;
 	memo?: string;
 };
+
+export type InventoryDashboardQuery = {
+	q?: string;
+	warehouseId?: string;
+	productId?: string;
+	availableOnly?: boolean;
+	page: number;
+	pageSize: number;
+	sortBy: 'createdAt' | 'availableKg' | 'avgCostPerKg';
+	sortDir: 'asc' | 'desc';
+};
+
+export type StockCardQuery = {
+	lotId?: string;
+	warehouseId?: string;
+	from?: string;
+	to?: string;
+	page: number;
+	pageSize: number;
+	sortDir: 'asc' | 'desc';
+};

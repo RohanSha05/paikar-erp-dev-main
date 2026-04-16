@@ -18,6 +18,7 @@ const destinationRefSchema = z.object({
 const purchaseItemSchema = z.object({
   productId: z.string().uuid(),
   productType: z.string().min(1).optional(),
+  productName: z.string().min(1).optional(),
   id: z.string().optional(),
   bagCount: z.number().int().nonnegative(),
   actualKgPerBag: z.number().nonnegative(),

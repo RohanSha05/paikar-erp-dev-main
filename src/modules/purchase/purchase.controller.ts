@@ -41,7 +41,11 @@ export async function createDraft(req: Request, res: Response, next: NextFunctio
 export async function updateDraft(req: Request, res: Response, next: NextFunction) {
   try {
     const updated = await service.updatePurchaseOrderDraft(req.params.id, req.body);
-    return res.json(updated);
+    return res.json({
+      success: true,
+      message: 'Purchase draft updated',
+      data: updated
+    });
   } catch (error) {
     next(error);
   }

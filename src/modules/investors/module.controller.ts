@@ -28,7 +28,11 @@ export async function create(req: Request, res: Response, next: any) {
 
 export async function get(req: Request, res: Response, next: any) {
   try {
-    const investor = await service.getInvestor(req.params.id);
+    const { id } = req.params;
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      throw new HttpError(400, 'Invalid investor ID');
+    }
+    const investor = await service.getInvestor(id);
     if (!investor) {
       throw new HttpError(404, 'Investor not found');
     }
@@ -43,7 +47,11 @@ export async function get(req: Request, res: Response, next: any) {
 
 export async function update(req: Request, res: Response, next: any) {
   try {
-    const investor = await service.updateInvestor(req.params.id, req.body);
+    const { id } = req.params;
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      throw new HttpError(400, 'Invalid investor ID');
+    }
+    const investor = await service.updateInvestor(id, req.body);
     if (!investor) {
       throw new HttpError(404, 'Investor not found');
     }
@@ -58,7 +66,11 @@ export async function update(req: Request, res: Response, next: any) {
 
 export async function remove(req: Request, res: Response, next: any) {
   try {
-    const deleted = await service.deleteInvestor(req.params.id);
+    const { id } = req.params;
+    if (!id || typeof id !== 'string' || !id.trim()) {
+      throw new HttpError(400, 'Invalid investor ID');
+    }
+    const deleted = await service.deleteInvestor(id);
     if (!deleted) {
       throw new HttpError(404, 'Investor not found');
     }

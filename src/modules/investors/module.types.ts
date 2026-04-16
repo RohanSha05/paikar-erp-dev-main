@@ -4,6 +4,8 @@ export interface Investor {
   phone: string | null;
   address: string | null;
   nidNo: string | null;
+  nomineeName: string | null;
+  startDate: Date | null;
   photoUrl: string | null;
   agreementPct: number | null;
   notes: string | null;

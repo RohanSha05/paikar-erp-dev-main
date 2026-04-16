@@ -32,28 +32,63 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
+exports.remove = remove;
+const httpError_1 = require("../../common/httpError");
 const service = __importStar(require("./module.service"));
-async function list(_req, res) {
-    const customers = await service.listCustomers();
-    return res.json({ success: true, data: customers });
-}
-async function create(req, res) {
-    const customer = await service.createCustomer(req.body);
-    return res.status(201).json({
-        success: true,
-        message: 'Customer created',
-        data: customer
+function list(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const customers = yield service.listCustomers();
+        return res.json({ success: true, data: customers });
     });
 }
-async function update(req, res) {
-    const customer = await service.updateCustomer(req.params.id, req.body);
-    return res.json({
-        success: true,
-        message: 'Customer updated',
-        data: customer
+function create(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const customer = yield service.createCustomer(req.body);
+        return res.status(201).json({
+            success: true,
+            message: 'Customer created',
+            data: customer
+        });
+    });
+}
+function update(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string' || !id.trim()) {
+            throw new httpError_1.HttpError(400, 'Invalid customer ID');
+        }
+        const customer = yield service.updateCustomer(id, req.body);
+        return res.json({
+            success: true,
+            message: 'Customer updated',
+            data: customer
+        });
+    });
+}
+function remove(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string' || !id.trim()) {
+            throw new httpError_1.HttpError(400, 'Invalid customer ID');
+        }
+        const result = yield service.deleteCustomer(id);
+        return res.json({
+            success: true,
+            message: 'Customer deleted',
+            data: result
+        });
     });
 }

@@ -1,4 +1,5 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreatePurchaseOrderDraftInput, UpdatePurchaseOrderDraftInput } from './purchase.validator';
@@ -9,24 +10,32 @@ function ratePerKg(rateBasis: 'perKg' | 'perMon', rateValue: number) {
   return rateBasis === 'perKg' ? rateValue : rateValue / KG_PER_MON;
 }
 
+function uniqueSuffix() {
+  return randomUUID().replace(/-/g, '').slice(0, 10);
+}
+
 function lotNo() {
-  return `LOT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `LOT-${Date.now()}-${uniqueSuffix()}`;
 }
 
 function stockMoveNo() {
-  return `MV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `MV-${Date.now()}-${uniqueSuffix()}`;
 }
 
 function voucherNo() {
-  return `VCH-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `VCH-${Date.now()}-${uniqueSuffix()}`;
 }
 
 function poNo() {
-  return `PO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `PO-${Date.now()}-${uniqueSuffix()}`;
 }
 
 function lotLabel(poNoValue: string, productId: string, warehouseId: string) {
-  return `LOT-${poNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}`;
+  return `LOT-${poNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}-${uniqueSuffix()}`;
+}
+
+function resolveItemDisplayName(item: { productType?: string | null; productName?: string | null }, productName: string) {
+  return item.productType?.trim() || item.productName?.trim() || productName;
 }
 
 function numberValue(value: unknown) {
@@ -128,6 +137,13 @@ export async function createDraft(input: CreatePurchaseOrderDraftInput) {
   const warehouse = await prisma.warehouse.findUnique({ where: { id: input.warehouseId } });
   if (!warehouse) throw new HttpError(404, 'Warehouse not found');
 
+  const productIds = [...new Set(input.items.map((item) => item.productId))];
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, name: true }
+  });
+  const productNameById = new Map(products.map((product) => [product.id, product.name]));
+
   return prisma.purchaseOrder.create({
     data: {
       poNo: poNo(),
@@ -142,7 +158,7 @@ export async function createDraft(input: CreatePurchaseOrderDraftInput) {
         bagCostMode: input.bagCostMode,
       bagCostPerBag: new Prisma.Decimal(input.bagCostPerBag),
       remarks: input.remarks,
-        productType: input.items[0]?.productType,
+        productType: resolveItemDisplayName(input.items[0] ?? {}, productNameById.get(input.items[0]?.productId || '') || ''),
       varietyNote: input.varietyNote,
         destinationType: input.destinationRef?.type ?? input.destinationKind,
         destinationRefId: input.destinationRef?.id,
@@ -157,7 +173,7 @@ export async function createDraft(input: CreatePurchaseOrderDraftInput) {
       items: {
         create: input.items.map((x) => ({
           productId: x.productId,
-            productName: x.productType,
+            productName: resolveItemDisplayName(x, productNameById.get(x.productId) || ''),
           bagCount: x.bagCount,
           actualKgPerBag: new Prisma.Decimal(x.actualKgPerBag),
           accountingKgPerBag: new Prisma.Decimal(x.accountingKgPerBag),
@@ -195,6 +211,13 @@ export async function updatePurchaseOrderDraft(
     const warehouse = await tx.warehouse.findUnique({ where: { id: input.warehouseId } });
     if (!warehouse) throw new HttpError(404, 'Warehouse not found');
 
+    const productIds = [...new Set(input.items.map((item) => item.productId))];
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true }
+    });
+    const productNameById = new Map(products.map((product) => [product.id, product.name]));
+
     await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
 
     const updated = await tx.purchaseOrder.update({
@@ -210,7 +233,7 @@ export async function updatePurchaseOrderDraft(
         bagCostMode: input.bagCostMode,
         bagCostPerBag: new Prisma.Decimal(input.bagCostPerBag),
         remarks: input.remarks,
-        productType: input.items[0]?.productType,
+        productType: resolveItemDisplayName(input.items[0] ?? {}, productNameById.get(input.items[0]?.productId || '') || ''),
         varietyNote: input.varietyNote,
         destinationType: input.destinationRef?.type ?? input.destinationKind,
         destinationRefId: input.destinationRef?.id,
@@ -225,7 +248,7 @@ export async function updatePurchaseOrderDraft(
         items: {
           create: input.items.map((x) => ({
             productId: x.productId,
-            productName: x.productType,
+            productName: resolveItemDisplayName(x, productNameById.get(x.productId) || ''),
             bagCount: x.bagCount,
             actualKgPerBag: new Prisma.Decimal(x.actualKgPerBag),
             accountingKgPerBag: new Prisma.Decimal(x.accountingKgPerBag),
@@ -272,9 +295,25 @@ export async function approvePurchaseOrder(id: string) {
     const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
 
     for (const item of po.items) {
-      const actual = Number(item.actualKgPerBag) * item.bagCount;
-      const accounting = Number(item.accountingKgPerBag) * item.bagCount;
+      const bagCount = Number(item.bagCount);
+      if (!Number.isFinite(bagCount) || bagCount <= 0) {
+        throw new HttpError(400, `Invalid bag count for product ${item.productId}: must be greater than 0`);
+      }
+      
+      const actualKg = Number(item.actualKgPerBag);
+      const accountingKg = Number(item.accountingKgPerBag);
+      if (!Number.isFinite(actualKg) || actualKg < 0 || !Number.isFinite(accountingKg) || accountingKg < 0) {
+        throw new HttpError(400, `Invalid kg per bag values for product ${item.productId}`);
+      }
+
+      const actual = actualKg * bagCount;
+      const accounting = accountingKg * bagCount;
       const stockKg = item.weightPolicy === 'actual' ? actual : accounting;
+      
+      if (stockKg <= 0) {
+        throw new HttpError(400, `Invalid stock quantity for product ${item.productId}: calculated as ${stockKg} kg`);
+      }
+
       const rpk = ratePerKg(item.rateBasis as 'perKg' | 'perMon', Number(item.rateValue));
 
       const lineBase = stockKg * rpk;
@@ -304,8 +343,8 @@ export async function approvePurchaseOrder(id: string) {
           lotId: lot.id,
           warehouseId: po.warehouseId,
           qtyKg: new Prisma.Decimal(stockKg),
-          reason: 'PURCHASE' as any,
-          refType: 'PO' as any,
+          reason: StockMoveReason.PURCHASE,
+          refType: StockRefType.PO,
           refId: po.id
         }
       });
@@ -315,12 +354,16 @@ export async function approvePurchaseOrder(id: string) {
     const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
     const totalCost = basePurchase + extraCosts;
 
-    const inventoryAccount = await tx.account.findUnique({ where: { code: 'AC-INVENTORY' } });
-    const payableAccount = await tx.account.findUnique({ where: { code: 'AC-PAYABLES' } });
-
-    if (!inventoryAccount || !payableAccount) {
-      throw new HttpError(500, 'Required accounts are missing (AC-INVENTORY / AC-PAYABLES)');
-    }
+    const inventoryAccount = await tx.account.upsert({
+      where: { code: 'AC-INVENTORY' },
+      update: {},
+      create: { code: 'AC-INVENTORY', name: 'Inventory', type: 'asset' }
+    });
+    const payableAccount = await tx.account.upsert({
+      where: { code: 'AC-PAYABLES' },
+      update: {},
+      create: { code: 'AC-PAYABLES', name: 'Payables', type: 'liability' }
+    });
 
     const voucher = await tx.voucher.create({
       data: {

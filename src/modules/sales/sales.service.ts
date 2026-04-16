@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateSalesOrderInput, UpdateSalesOrderInput } from './sales.schema';
@@ -233,6 +233,9 @@ export async function confirmSalesOrder(id: string, userId?: string) {
       }
 
       const qtyKg = Number(item.qtyKg);
+      if (!Number.isFinite(qtyKg) || qtyKg <= 0) {
+        throw new HttpError(400, `Invalid quantity for item in lot ${item.lotId}: must be greater than 0`);
+      }
       const availableKg = Number(lot.availableKg);
       if (availableKg < qtyKg) {
         throw new HttpError(409, `Insufficient stock in lot ${lot.label}`);
@@ -251,8 +254,8 @@ export async function confirmSalesOrder(id: string, userId?: string) {
           lotId: lot.id,
           warehouseId: lot.warehouseId,
           qtyKg: new Prisma.Decimal(qtyKg),
-          reason: 'SALE' as any,
-          refType: 'SO' as any,
+          reason: StockMoveReason.SALE,
+          refType: StockRefType.SO,
           refId: order.id,
           memo: `Sale order ${order.soNo}`,
           createdBy: userId,

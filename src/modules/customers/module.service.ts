@@ -23,3 +23,22 @@ export async function updateCustomer(id: string, input: UpdateCustomerInput) {
     data: input
   });
 }
+
+export async function deleteCustomer(id: string) {
+  const customer = await prisma.customer.findUnique({ where: { id } });
+  if (!customer) {
+    throw new HttpError(404, 'Customer not found');
+  }
+
+  const linkedSalesOrders = await prisma.salesOrder.count({
+    where: { customerId: id }
+  });
+
+  if (linkedSalesOrders > 0) {
+    throw new HttpError(409, 'Cannot delete customer because sales orders exist');
+  }
+
+  await prisma.customer.delete({ where: { id } });
+
+  return { id };
+}

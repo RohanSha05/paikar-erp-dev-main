@@ -30,4 +30,9 @@ export const updateCustomerSchema = z.object({
       message: 'At least one field is required'
     })
 });
-// updated
+
+export const deleteCustomerSchema = z.object({
+  params: z.object({
+    id: z.string().uuid()
+  })
+});

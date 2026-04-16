@@ -32,28 +32,43 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
 const service = __importStar(require("./module.service"));
-async function list(_req, res) {
-    const users = await service.listUsers();
-    return res.json({ success: true, data: users });
-}
-async function create(req, res) {
-    const user = await service.createUser(req.body);
-    return res.status(201).json({
-        success: true,
-        message: 'User created',
-        data: user
+function list(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const users = yield service.listUsers();
+        return res.json({ success: true, data: users });
     });
 }
-async function update(req, res) {
-    const user = await service.updateUser(req.params.id, req.body);
-    return res.json({
-        success: true,
-        message: 'User updated',
-        data: user
+function create(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const user = yield service.createUser(req.body);
+        return res.status(201).json({
+            success: true,
+            message: 'User created',
+            data: user
+        });
+    });
+}
+function update(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const user = yield service.updateUser(req.params.id, req.body);
+        return res.json({
+            success: true,
+            message: 'User updated',
+            data: user
+        });
     });
 }
