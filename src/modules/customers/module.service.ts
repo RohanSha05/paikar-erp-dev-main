@@ -1,6 +1,7 @@
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateCustomerInput, UpdateCustomerInput } from './module.types';
+import { ensurePartyAccount } from '../accounting/party-account';
 
 export async function listCustomers() {
   return prisma.customer.findMany({
@@ -9,19 +10,37 @@ export async function listCustomers() {
 }
 
 export async function createCustomer(input: CreateCustomerInput) {
-  return prisma.customer.create({ data: input });
+  const customer = await prisma.customer.create({ data: input });
+
+  await ensurePartyAccount({
+    kind: 'customer',
+    refId: customer.id,
+    name: customer.name,
+    type: 'party',
+  });
+
+  return customer;
 }
 
 export async function updateCustomer(id: string, input: UpdateCustomerInput) {
-  const customer = await prisma.customer.findUnique({ where: { id } });
-  if (!customer) {
+  const existingCustomer = await prisma.customer.findUnique({ where: { id } });
+  if (!existingCustomer) {
     throw new HttpError(404, 'Customer not found');
   }
 
-  return prisma.customer.update({
+  const updatedCustomer = await prisma.customer.update({
     where: { id },
     data: input
   });
+
+  await ensurePartyAccount({
+    kind: 'customer',
+    refId: updatedCustomer.id,
+    name: updatedCustomer.name,
+    type: 'party',
+  });
+
+  return updatedCustomer;
 }
 
 export async function deleteCustomer(id: string) {

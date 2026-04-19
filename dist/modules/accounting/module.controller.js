@@ -48,6 +48,7 @@ exports.getDaybook = getDaybook;
 exports.getLedger = getLedger;
 exports.getTrialBalance = getTrialBalance;
 exports.getExpenseSummary = getExpenseSummary;
+exports.getReportMeta = getReportMeta;
 const service = __importStar(require("./module.service"));
 function listAccounts(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -68,10 +69,18 @@ function createAccount(req, res) {
 function getDaybook(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const date = typeof req.query.date === 'string' ? req.query.date : undefined;
-        if (!date) {
-            return res.status(400).json({ success: false, message: 'date query is required' });
+        const meta = yield service.getReportMeta();
+        const effectiveDate = date || meta.latestVoucherDate;
+        if (!effectiveDate) {
+            return res.json({
+                success: true,
+                data: {
+                    list: [],
+                    totals: { debit: 0, credit: 0 },
+                },
+            });
         }
-        const data = yield service.getDaybook(date);
+        const data = yield service.getDaybook(effectiveDate);
         return res.json({ success: true, data });
     });
 }
@@ -95,9 +104,15 @@ function getTrialBalance(_req, res) {
 }
 function getExpenseSummary(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
-        const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : new Date().getFullYear();
-        const year = Number.isFinite(yearValue) ? yearValue : new Date().getFullYear();
+        const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : NaN;
+        const year = Number.isFinite(yearValue) ? yearValue : NaN;
         const data = yield service.getExpenseSummary(year);
+        return res.json({ success: true, data });
+    });
+}
+function getReportMeta(_req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.getReportMeta();
         return res.json({ success: true, data });
     });
 }

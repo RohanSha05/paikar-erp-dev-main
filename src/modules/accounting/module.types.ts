@@ -59,3 +59,8 @@ export interface ExpenseMonthSummaryDto {
 	variable: number;
 	total: number;
 }
+
+export interface ReportMetaDto {
+	latestVoucherDate: string | null;
+	latestVoucherYear: number | null;
+}

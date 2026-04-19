@@ -37,6 +37,8 @@ exports.createPurchaseOrderDraftSchema = zod_1.z.object({
     transportMode: zod_1.z.enum(['sellerIncluded', 'marketTruck', 'ownTruck']).optional(),
     loading: zod_1.z.number().nonnegative().default(0),
     misc: zod_1.z.number().nonnegative().default(0),
+    advancePaid: zod_1.z.number().nonnegative().optional().default(0),
+    advanceInstrumentId: zod_1.z.string().optional(),
     bagCostMode: zod_1.z.enum(['paid', 'self']).optional(),
     bagCostPerBag: zod_1.z.number().nonnegative().default(0),
     loadingUnloading: zod_1.z.number().nonnegative().default(0),

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import {
 	AdjustStockInput,
 	TransferStockInput,
@@ -8,24 +9,78 @@ import {
 	StockCardQuery
 } from './module.types';
 
-function moveNo() {
-	return `MV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function moveNo(tx: Prisma.TransactionClient) {
+	return nextDailySequenceIdForDelegate(tx.stockMove, 'moveNo', 'MV');
 }
 
-function transferRef() {
-	return `TRF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function transferRef(tx: Prisma.TransactionClient) {
+	return nextDailySequenceIdForDelegate(tx.stockMove, 'refId', 'TRF');
 }
 
-function adjustmentRef() {
-	return `ADJ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function adjustmentRef(tx: Prisma.TransactionClient) {
+	return nextDailySequenceIdForDelegate(tx.stockMove, 'refId', 'ADJ');
 }
 
-function transferLotNo() {
-	return `LOT-TRF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function transferLotNo(tx: Prisma.TransactionClient) {
+	return nextDailySequenceIdForDelegate(tx.lot, 'lotNo', 'LOT-TRF');
 }
 
-function transferLotLabel(productId: string, warehouseId: string) {
-	return `LOT-TRF-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}`;
+function transferLotLabel(lotNoValue: string, productId: string, warehouseId: string) {
+	return `${lotNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}`;
+}
+
+async function ensureSystemAccountByCode(
+	tx: Prisma.TransactionClient,
+	code: string,
+	name: string,
+	type: 'asset' | 'expense' | 'liability' = 'asset',
+) {
+	return tx.account.upsert({
+		where: { code },
+		update: {},
+		create: {
+			code,
+			name,
+			type,
+			opening: new Prisma.Decimal(0),
+			active: true,
+		},
+	});
+}
+
+async function generateVoucherNo(tx: Prisma.TransactionClient, vdate: Date) {
+	return nextDailySequenceIdForDelegate(tx.voucher, 'voucherNo', 'VCH', vdate);
+}
+
+async function createInventoryVoucher(
+	tx: Prisma.TransactionClient,
+	input: {
+		vdate: Date;
+		narration: string;
+		rows: Array<{ accountId: string; dr: number; cr: number; memo?: string }>;
+	},
+) {
+	const voucherNo = await generateVoucherNo(tx, input.vdate);
+	const voucher = await tx.voucher.create({
+		data: {
+			voucherNo,
+			vtype: 'journal',
+			vdate: input.vdate,
+			narration: input.narration,
+		},
+	});
+
+	await tx.voucherRow.createMany({
+		data: input.rows.map((row) => ({
+			voucherId: voucher.id,
+			accountId: row.accountId,
+			dr: new Prisma.Decimal(row.dr || 0),
+			cr: new Prisma.Decimal(row.cr || 0),
+			memo: row.memo,
+		})),
+	});
+
+	return voucher;
 }
 
 export async function adjustStock(input: AdjustStockInput) {
@@ -48,21 +103,54 @@ export async function adjustStock(input: AdjustStockInput) {
 
 		const move = await tx.stockMove.create({
 			data: {
-				moveNo: moveNo(),
+				moveNo: await moveNo(tx),
 				lotId: lot.id,
 				warehouseId: lot.warehouseId,
 				qtyKg: new Prisma.Decimal(delta),
 				reason: 'ADJUSTMENT',
 				refType: 'ADJ',
-				refId: adjustmentRef(),
+				refId: await adjustmentRef(tx),
 				memo: input.reason,
 				lotLabel: lot.label
 			}
 		});
 
+		const absQty = Math.abs(delta);
+		const adjustmentValue = absQty * Number(lot.avgCostPerKg || 0);
+		let voucher: { id: string; voucherNo: string } | null = null;
+
+		if (adjustmentValue > 0) {
+			const inventoryAccount = await ensureSystemAccountByCode(tx, 'AC-INVENTORY', 'Inventory', 'asset');
+			const adjustmentAccount = await ensureSystemAccountByCode(
+				tx,
+				'AC-INVENTORY-ADJ',
+				'Inventory Adjustment',
+				'expense',
+			);
+
+			const rows =
+				input.mode === 'add'
+					? [
+						{ accountId: inventoryAccount.id, dr: adjustmentValue, cr: 0, memo: input.reason || 'Stock adjustment increase' },
+						{ accountId: adjustmentAccount.id, dr: 0, cr: adjustmentValue, memo: input.reason || 'Stock adjustment offset' },
+					]
+					: [
+						{ accountId: adjustmentAccount.id, dr: adjustmentValue, cr: 0, memo: input.reason || 'Stock adjustment expense' },
+						{ accountId: inventoryAccount.id, dr: 0, cr: adjustmentValue, memo: input.reason || 'Stock adjustment decrease' },
+					];
+
+			const voucherDate = new Date();
+			voucher = await createInventoryVoucher(tx, {
+				vdate: voucherDate,
+				narration: `Inventory adjustment ${input.mode} - ${lot.label}`,
+				rows,
+			});
+		}
+
 		return {
 			lot: updatedLot,
-			move
+			move,
+			voucher
 		};
 	});
 }
@@ -100,10 +188,11 @@ export async function transferStock(input: TransferStockInput) {
 		});
 
 		if (!destinationLot) {
+			const nextLotNo = await transferLotNo(tx);
 			destinationLot = await tx.lot.create({
 				data: {
-					lotNo: transferLotNo(),
-					label: transferLotLabel(sourceLot.productId, input.toWarehouseId),
+					lotNo: nextLotNo,
+					label: transferLotLabel(nextLotNo, sourceLot.productId, input.toWarehouseId),
 					productId: sourceLot.productId,
 					warehouseId: input.toWarehouseId,
 					availableKg: new Prisma.Decimal(0),
@@ -131,11 +220,11 @@ export async function transferStock(input: TransferStockInput) {
 			}
 		});
 
-		const refId = transferRef();
+		const refId = await transferRef(tx);
 
 		const outMove = await tx.stockMove.create({
 			data: {
-				moveNo: moveNo(),
+				moveNo: await moveNo(tx),
 				lotId: sourceLot.id,
 				warehouseId: sourceLot.warehouseId,
 				qtyKg: new Prisma.Decimal(-input.qtyKg),
@@ -149,7 +238,7 @@ export async function transferStock(input: TransferStockInput) {
 
 		const inMove = await tx.stockMove.create({
 			data: {
-				moveNo: moveNo(),
+				moveNo: await moveNo(tx),
 				lotId: updatedDestinationLot.id,
 				warehouseId: input.toWarehouseId,
 				qtyKg: new Prisma.Decimal(input.qtyKg),
@@ -161,10 +250,44 @@ export async function transferStock(input: TransferStockInput) {
 			}
 		});
 
+		const transferValue = input.qtyKg * Number(sourceLot.avgCostPerKg || 0);
+		let voucher: { id: string; voucherNo: string } | null = null;
+
+		if (transferValue > 0) {
+			const inventoryAccount = await ensureSystemAccountByCode(tx, 'AC-INVENTORY', 'Inventory', 'asset');
+			const transferClearingAccount = await ensureSystemAccountByCode(
+				tx,
+				'AC-INVENTORY-TRF',
+				'Inventory Transfer Clearing',
+				'asset',
+			);
+
+			const voucherDate = new Date();
+			voucher = await createInventoryVoucher(tx, {
+				vdate: voucherDate,
+				narration: `Inventory transfer ${sourceLot.label} -> ${updatedDestinationLot.label}`,
+				rows: [
+					{
+						accountId: inventoryAccount.id,
+						dr: transferValue,
+						cr: 0,
+						memo: input.memo || `Transfer in to ${toWarehouse.name}`,
+					},
+					{
+						accountId: transferClearingAccount.id,
+						dr: 0,
+						cr: transferValue,
+						memo: input.memo || `Transfer out from source warehouse`,
+					},
+				],
+			});
+		}
+
 		return {
 			sourceLot: updatedSourceLot,
 			destinationLot: updatedDestinationLot,
-			moves: [outMove, inMove]
+			moves: [outMove, inMove],
+			voucher
 		};
 	});
 }

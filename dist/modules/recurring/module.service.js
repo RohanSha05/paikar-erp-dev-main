@@ -17,7 +17,7 @@ exports.postRecurringTemplate = postRecurringTemplate;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
-const module_service_1 = require("../cashbook/module.service");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function toNumber(value) {
     return value ? Number(value) : 0;
 }
@@ -100,46 +100,87 @@ function monthDate(year, month, dayOfMonth) {
     const date = new Date(Date.UTC(year, month - 1, day));
     return date.toISOString().slice(0, 10);
 }
+function resolveAccountIdByCodeOrId(tx, value) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const key = value.trim();
+        if (!key) {
+            throw new httpError_1.HttpError(400, 'Account reference is required');
+        }
+        const account = yield tx.account.findFirst({
+            where: {
+                OR: [{ id: key }, { code: key }],
+            },
+            select: { id: true },
+        });
+        if (!account) {
+            throw new httpError_1.HttpError(404, `Account not found: ${key}`);
+        }
+        return account.id;
+    });
+}
 function postRecurringTemplate(id, year, month) {
     return __awaiter(this, void 0, void 0, function* () {
-        const template = yield prisma_1.prisma.recurringExpenseTemplate.findUnique({ where: { id } });
-        if (!template) {
-            throw new httpError_1.HttpError(404, 'Recurring template not found');
-        }
-        const duplicate = yield prisma_1.prisma.recurringExpensePost.findUnique({
-            where: { templateId_year_month: { templateId: id, year, month } },
-        });
-        if (duplicate) {
-            throw new httpError_1.HttpError(409, 'Recurring template already posted for this month');
-        }
-        if (!template.payFromAccountId) {
-            throw new httpError_1.HttpError(400, 'Pay from account is required');
-        }
-        const voucher = yield (0, module_service_1.createVoucher)({
-            vtype: 'journal',
-            vdate: monthDate(year, month, template.dayOfMonth || 1),
-            narration: `Recurring: ${template.name}`,
-            rows: [
-                { accountId: template.expenseAccountId, dr: toNumber(template.amount), cr: 0, memo: template.name },
-                { accountId: template.payFromAccountId, dr: 0, cr: toNumber(template.amount), memo: template.name },
-            ],
-        });
-        yield prisma_1.prisma.recurringExpensePost.create({
-            data: {
-                templateId: template.id,
-                year,
-                month,
+        return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+            const template = yield tx.recurringExpenseTemplate.findUnique({ where: { id } });
+            if (!template) {
+                throw new httpError_1.HttpError(404, 'Recurring template not found');
+            }
+            const duplicate = yield tx.recurringExpensePost.findUnique({
+                where: { templateId_year_month: { templateId: id, year, month } },
+            });
+            if (duplicate) {
+                throw new httpError_1.HttpError(409, 'Recurring template already posted for this month');
+            }
+            if (!template.payFromAccountId) {
+                throw new httpError_1.HttpError(400, 'Pay from account is required');
+            }
+            const expenseAccountId = yield resolveAccountIdByCodeOrId(tx, template.expenseAccountId);
+            const payFromAccountId = yield resolveAccountIdByCodeOrId(tx, template.payFromAccountId);
+            const voucherDateText = monthDate(year, month, template.dayOfMonth || 1);
+            const voucherDate = new Date(`${voucherDateText}T00:00:00.000Z`);
+            const voucher = yield tx.voucher.create({
+                data: {
+                    voucherNo: yield (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.voucher, 'voucherNo', 'VCH', voucherDate),
+                    vtype: 'journal',
+                    vdate: voucherDate,
+                    narration: `Recurring: ${template.name}`,
+                },
+            });
+            yield tx.voucherRow.createMany({
+                data: [
+                    {
+                        voucherId: voucher.id,
+                        accountId: expenseAccountId,
+                        dr: new client_1.Prisma.Decimal(toNumber(template.amount)),
+                        cr: new client_1.Prisma.Decimal(0),
+                        memo: template.name,
+                    },
+                    {
+                        voucherId: voucher.id,
+                        accountId: payFromAccountId,
+                        dr: new client_1.Prisma.Decimal(0),
+                        cr: new client_1.Prisma.Decimal(toNumber(template.amount)),
+                        memo: template.name,
+                    },
+                ],
+            });
+            yield tx.recurringExpensePost.create({
+                data: {
+                    templateId: template.id,
+                    year,
+                    month,
+                    voucherId: voucher.id,
+                    voucherNo: voucher.voucherNo,
+                },
+            });
+            yield tx.recurringExpenseTemplate.update({
+                where: { id: template.id },
+                data: { lastPostedDate: new Date() },
+            });
+            return {
                 voucherId: voucher.id,
                 voucherNo: voucher.voucherNo,
-            },
-        });
-        yield prisma_1.prisma.recurringExpenseTemplate.update({
-            where: { id: template.id },
-            data: { lastPostedDate: new Date() },
-        });
-        return {
-            voucherId: voucher.id,
-            voucherNo: voucher.voucherNo,
-        };
+            };
+        }));
     });
 }

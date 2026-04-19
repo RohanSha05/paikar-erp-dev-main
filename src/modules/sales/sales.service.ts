@@ -2,13 +2,19 @@ import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateSalesOrderInput, UpdateSalesOrderInput } from './sales.schema';
+import { ensurePartyAccount } from '../accounting/party-account';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 
-function soNo() {
-  return `SO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function soNo() {
+  return nextDailySequenceIdForDelegate(prisma.salesOrder, 'soNo', 'SO');
 }
 
-function stockMoveNo() {
-  return `SM-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function stockMoveNo(tx: Prisma.TransactionClient) {
+  return nextDailySequenceIdForDelegate(tx.stockMove, 'moveNo', 'SM');
+}
+
+async function voucherNo(tx: Prisma.TransactionClient, date: Date = new Date()) {
+  return nextDailySequenceIdForDelegate(tx.voucher, 'voucherNo', 'VCH', date);
 }
 
 function ratePerKg(rateBasis: 'perKg' | 'perMon', rateValue: number) {
@@ -105,7 +111,7 @@ export async function createSalesOrderDraft(input: CreateSalesOrderInput, userId
 
   return prisma.salesOrder.create({
     data: {
-      soNo: soNo(),
+      soNo: await soNo(),
       status: 'DRAFT',
       customerId: input.customerId,
       customerSnapshot,
@@ -202,6 +208,24 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
 }
 
 export async function confirmSalesOrder(id: string, userId?: string) {
+  const customerAccount = await prisma.salesOrder.findUnique({
+    where: { id },
+    select: {
+      customer: {
+        select: { id: true, name: true },
+      },
+    },
+  });
+
+  const customerAccountId = customerAccount?.customer
+    ? (await ensurePartyAccount({
+        kind: 'customer',
+        refId: customerAccount.customer.id,
+        name: customerAccount.customer.name,
+        type: 'party',
+      })).id
+    : null;
+
   return prisma.$transaction(async (tx) => {
     const order = await tx.salesOrder.findUnique({
       where: { id },
@@ -250,10 +274,10 @@ export async function confirmSalesOrder(id: string, userId?: string) {
 
       await tx.stockMove.create({
         data: {
-          moveNo: stockMoveNo(),
+          moveNo: await stockMoveNo(tx),
           lotId: lot.id,
           warehouseId: lot.warehouseId,
-          qtyKg: new Prisma.Decimal(qtyKg),
+          qtyKg: new Prisma.Decimal(-qtyKg),
           reason: StockMoveReason.SALE,
           refType: StockRefType.SO,
           refId: order.id,
@@ -294,6 +318,43 @@ export async function confirmSalesOrder(id: string, userId?: string) {
         }
       }
     });
+
+    if (customerAccountId) {
+      const incomeAccount = await tx.account.upsert({
+        where: { code: 'AC-INC' },
+        update: {},
+        create: { code: 'AC-INC', name: 'Income', type: 'income' },
+      });
+
+      const voucher = await tx.voucher.create({
+        data: {
+          voucherNo: await voucherNo(tx),
+          vtype: 'journal',
+          vdate: new Date(),
+          narration: `Sales order ${order.soNo}`,
+          salesOrderId: order.id,
+        },
+      });
+
+      await tx.voucherRow.createMany({
+        data: [
+          {
+            voucherId: voucher.id,
+            accountId: customerAccountId,
+            dr: new Prisma.Decimal(totalsJson.total),
+            cr: new Prisma.Decimal(0),
+            memo: `SO ${order.soNo} receivable`,
+          },
+          {
+            voucherId: voucher.id,
+            accountId: incomeAccount.id,
+            dr: new Prisma.Decimal(0),
+            cr: new Prisma.Decimal(totalsJson.total),
+            memo: `SO ${order.soNo} income`,
+          },
+        ],
+      });
+    }
 
     return {
       salesOrder: updated,

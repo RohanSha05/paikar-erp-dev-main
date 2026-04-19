@@ -12,5 +12,6 @@ router.get('/daybook', requireAuth, controller.getDaybook);
 router.get('/ledger', requireAuth, controller.getLedger);
 router.get('/trial-balance', requireAuth, controller.getTrialBalance);
 router.get('/expenses', requireAuth, controller.getExpenseSummary);
+router.get('/report-meta', requireAuth, controller.getReportMeta);
 
 export default router;

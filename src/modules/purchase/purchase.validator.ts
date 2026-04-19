@@ -40,6 +40,8 @@ export const createPurchaseOrderDraftSchema = z.object({
   transportMode: z.enum(['sellerIncluded', 'marketTruck', 'ownTruck']).optional(),
   loading: z.number().nonnegative().default(0),
   misc: z.number().nonnegative().default(0),
+  advancePaid: z.number().nonnegative().optional().default(0),
+  advanceInstrumentId: z.string().optional(),
 
   bagCostMode: z.enum(['paid', 'self']).optional(),
   bagCostPerBag: z.number().nonnegative().default(0),

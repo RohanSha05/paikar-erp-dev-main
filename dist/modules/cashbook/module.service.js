@@ -18,6 +18,8 @@ exports.getVoucherById = getVoucherById;
 exports.listVouchers = listVouchers;
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function slugify(value) {
     return value
         .trim()
@@ -42,18 +44,31 @@ function normalizePartyType(input) {
         return 'EMPLOYEE';
     return 'OTHER';
 }
-function generatePartyCode(type, name) {
+function generatePartyCode(type) {
     return __awaiter(this, void 0, void 0, function* () {
-        const prefix = slugify(type).slice(0, 4) || 'PRTY';
-        const base = slugify(name) || 'PARTY';
-        for (let i = 0; i < 5; i += 1) {
-            const code = `${prefix}-${base}-${Date.now().toString().slice(-5)}${i}`.slice(0, 40);
-            const exists = yield prisma_1.prisma.party.findUnique({ where: { code } });
-            if (!exists)
-                return code;
-        }
-        return `${prefix}-${base}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+        const typeTag = slugify(type).slice(0, 4) || 'PRTY';
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.party, 'code', `PTY-${typeTag}`);
     });
+}
+function generateDriverId() {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.driver, 'id', 'DRV');
+    });
+}
+function generateInvestorId() {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.investor, 'id', 'INV');
+    });
+}
+function masterPartyCode(kind, id) {
+    const k = kind.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+    const r = id.trim().toUpperCase().replace(/[^A-Z0-9-]+/g, '-');
+    return `MST-${k}-${r}`.slice(0, 64);
+}
+function partyAccountCodeForPartyTable(type, partyCode) {
+    const normType = type.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+    const normCode = partyCode.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+    return `PTY-${normType}-${normCode}`.slice(0, 64);
 }
 /**
  * Create a party in Party table.
@@ -65,6 +80,118 @@ function createParty(input) {
             throw new httpError_1.HttpError(400, 'Party name is required');
         }
         const type = normalizePartyType(input.type);
+        if (type === 'SELLER') {
+            const existingSeller = yield prisma_1.prisma.seller.findFirst({
+                where: {
+                    name: {
+                        equals: name,
+                        mode: 'insensitive',
+                    },
+                },
+            });
+            const seller = existingSeller || (yield prisma_1.prisma.seller.create({ data: { name } }));
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'seller',
+                refId: seller.id,
+                name: seller.name,
+                type: 'party',
+            });
+            return {
+                id: seller.id,
+                code: masterPartyCode('seller', seller.id),
+                name: seller.name,
+                type: 'seller',
+                active: true,
+                accountId: account.id,
+            };
+        }
+        if (type === 'CUSTOMER') {
+            const existingCustomer = yield prisma_1.prisma.customer.findFirst({
+                where: {
+                    name: {
+                        equals: name,
+                        mode: 'insensitive',
+                    },
+                },
+            });
+            const customer = existingCustomer || (yield prisma_1.prisma.customer.create({ data: { name } }));
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'customer',
+                refId: customer.id,
+                name: customer.name,
+                type: 'party',
+            });
+            return {
+                id: customer.id,
+                code: masterPartyCode('customer', customer.id),
+                name: customer.name,
+                type: 'customer',
+                active: true,
+                accountId: account.id,
+            };
+        }
+        if (type === 'DRIVER') {
+            const existingDriver = yield prisma_1.prisma.driver.findFirst({
+                where: {
+                    name: {
+                        equals: name,
+                        mode: 'insensitive',
+                    },
+                },
+            });
+            const driver = existingDriver || (yield prisma_1.prisma.driver.create({
+                data: {
+                    id: yield generateDriverId(),
+                    name,
+                    active: true,
+                },
+            }));
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'driver',
+                refId: driver.id,
+                name: driver.name,
+                type: 'party',
+            });
+            return {
+                id: driver.id,
+                code: masterPartyCode('driver', driver.id),
+                name: driver.name,
+                type: 'driver',
+                active: driver.active,
+                accountId: account.id,
+            };
+        }
+        if (type === 'INVESTOR') {
+            const existingInvestor = yield prisma_1.prisma.investor.findFirst({
+                where: {
+                    name: {
+                        equals: name,
+                        mode: 'insensitive',
+                    },
+                },
+            });
+            const investor = existingInvestor || (yield prisma_1.prisma.investor.create({
+                data: {
+                    id: yield generateInvestorId(),
+                    name,
+                    active: true,
+                },
+            }));
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'investor',
+                refId: investor.id,
+                name: investor.name,
+                type: 'party',
+            });
+            return {
+                id: investor.id,
+                code: masterPartyCode('investor', investor.id),
+                name: investor.name,
+                type: 'investor',
+                active: investor.active,
+                accountId: account.id,
+            };
+        }
         const existing = yield prisma_1.prisma.party.findFirst({
             where: {
                 active: true,
@@ -84,7 +211,7 @@ function createParty(input) {
                 active: existing.active,
             };
         }
-        const code = yield generatePartyCode(type, name);
+        const code = yield generatePartyCode(type);
         const created = yield prisma_1.prisma.party.create({
             data: {
                 code,
@@ -92,6 +219,13 @@ function createParty(input) {
                 type,
                 active: true,
             },
+        });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: created.type.toLowerCase(),
+            refId: created.id,
+            name: created.name,
+            code: partyAccountCodeForPartyTable(created.type, created.code),
+            type: 'party',
         });
         return {
             id: created.id,
@@ -109,38 +243,91 @@ function createParty(input) {
 function listParties(kind) {
     return __awaiter(this, void 0, void 0, function* () {
         const type = kind ? normalizePartyType(kind) : undefined;
-        const parties = yield prisma_1.prisma.party.findMany({
-            where: Object.assign({ active: true }, (type ? { type } : {})),
-            orderBy: [{ type: 'asc' }, { name: 'asc' }],
-        });
-        const partyAccountCodes = parties.map((party) => partyAccountCode(party.type, party.code));
-        const linkedAccounts = partyAccountCodes.length
-            ? yield prisma_1.prisma.account.findMany({
-                where: {
-                    type: 'party',
-                    code: { in: partyAccountCodes },
-                },
-                select: { id: true, code: true },
-            })
-            : [];
-        const accountByCode = new Map();
+        const includeSellers = !type || type === 'SELLER';
+        const includeCustomers = !type || type === 'CUSTOMER';
+        const includeDrivers = !type || type === 'DRIVER';
+        const includeInvestors = !type || type === 'INVESTOR';
+        const includeGenericPartyTable = !type || ['MILL', 'EMPLOYEE', 'OTHER'].includes(type);
+        const [sellers, customers, drivers, investors, parties, linkedAccounts] = yield Promise.all([
+            includeSellers ? prisma_1.prisma.seller.findMany({ orderBy: { name: 'asc' } }) : Promise.resolve([]),
+            includeCustomers ? prisma_1.prisma.customer.findMany({ orderBy: { name: 'asc' } }) : Promise.resolve([]),
+            includeDrivers ? prisma_1.prisma.driver.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+            includeInvestors ? prisma_1.prisma.investor.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+            includeGenericPartyTable
+                ? prisma_1.prisma.party.findMany({
+                    where: Object.assign({ active: true }, (type ? { type } : {})),
+                    orderBy: [{ type: 'asc' }, { name: 'asc' }],
+                })
+                : Promise.resolve([]),
+            prisma_1.prisma.account.findMany({
+                where: { type: 'party' },
+                select: { id: true, partyKind: true, partyRefId: true },
+            }),
+        ]);
+        const accountByRef = new Map();
         for (const account of linkedAccounts) {
-            accountByCode.set(account.code, account.id);
+            const k = `${(account.partyKind || '').toLowerCase()}:${account.partyRefId || ''}`;
+            if (account.partyKind && account.partyRefId && !accountByRef.has(k)) {
+                accountByRef.set(k, account.id);
+            }
         }
-        return parties.map((party) => ({
-            id: party.id,
-            code: party.code,
-            name: party.name,
-            type: party.type.toLowerCase(),
-            active: party.active,
-            accountId: accountByCode.get(partyAccountCode(party.type, party.code)),
-        }));
+        const rows = [];
+        for (const seller of sellers) {
+            rows.push({
+                id: seller.id,
+                code: masterPartyCode('seller', seller.id),
+                name: seller.name,
+                type: 'seller',
+                active: true,
+                accountId: accountByRef.get(`seller:${seller.id}`),
+            });
+        }
+        for (const customer of customers) {
+            rows.push({
+                id: customer.id,
+                code: masterPartyCode('customer', customer.id),
+                name: customer.name,
+                type: 'customer',
+                active: true,
+                accountId: accountByRef.get(`customer:${customer.id}`),
+            });
+        }
+        for (const driver of drivers) {
+            rows.push({
+                id: driver.id,
+                code: masterPartyCode('driver', driver.id),
+                name: driver.name,
+                type: 'driver',
+                active: driver.active,
+                accountId: accountByRef.get(`driver:${driver.id}`),
+            });
+        }
+        for (const investor of investors) {
+            rows.push({
+                id: investor.id,
+                code: masterPartyCode('investor', investor.id),
+                name: investor.name,
+                type: 'investor',
+                active: investor.active,
+                accountId: accountByRef.get(`investor:${investor.id}`),
+            });
+        }
+        for (const party of parties) {
+            rows.push({
+                id: party.id,
+                code: party.code,
+                name: party.name,
+                type: party.type.toLowerCase(),
+                active: party.active,
+                accountId: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`),
+            });
+        }
+        return rows.sort((a, b) => {
+            if (a.type !== b.type)
+                return a.type.localeCompare(b.type);
+            return a.name.localeCompare(b.name);
+        });
     });
-}
-function partyAccountCode(type, partyCode) {
-    const normType = type.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
-    const normCode = partyCode.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
-    return `PTY-${normType}-${normCode}`.slice(0, 64);
 }
 /**
  * Resolve party account by Party.id, creating one if it does not exist.
@@ -149,43 +336,92 @@ function partyAccountCode(type, partyCode) {
 function resolvePartyAccount(partyId) {
     return __awaiter(this, void 0, void 0, function* () {
         const party = yield prisma_1.prisma.party.findUnique({ where: { id: partyId } });
-        if (!party || !party.active) {
-            throw new httpError_1.HttpError(404, 'Party not found');
-        }
-        const accountCode = partyAccountCode(party.type, party.code);
-        const existing = yield prisma_1.prisma.account.findFirst({
-            where: {
+        if (party === null || party === void 0 ? void 0 : party.active) {
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: party.type.toLowerCase(),
+                refId: party.id,
+                name: party.name,
+                code: partyAccountCodeForPartyTable(party.type, party.code),
                 type: 'party',
-                code: accountCode,
-            },
-        });
-        if (existing) {
+            });
             return {
-                id: existing.id,
-                code: existing.code,
-                name: existing.name,
-                type: existing.type,
-                active: existing.active,
-                opening: existing.opening ? Number(existing.opening) : 0,
+                id: account.id,
+                code: account.code,
+                name: account.name,
+                type: account.type,
+                active: account.active,
+                opening: account.opening ? Number(account.opening) : 0,
             };
         }
-        const created = yield prisma_1.prisma.account.create({
-            data: {
-                code: accountCode,
-                name: party.name,
+        const seller = yield prisma_1.prisma.seller.findUnique({ where: { id: partyId } });
+        if (seller) {
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'seller',
+                refId: seller.id,
+                name: seller.name,
                 type: 'party',
-                opening: 0,
-                active: true,
-            },
-        });
-        return {
-            id: created.id,
-            code: created.code,
-            name: created.name,
-            type: created.type,
-            active: created.active,
-            opening: created.opening ? Number(created.opening) : 0,
-        };
+            });
+            return {
+                id: account.id,
+                code: account.code,
+                name: account.name,
+                type: account.type,
+                active: account.active,
+                opening: account.opening ? Number(account.opening) : 0,
+            };
+        }
+        const customer = yield prisma_1.prisma.customer.findUnique({ where: { id: partyId } });
+        if (customer) {
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'customer',
+                refId: customer.id,
+                name: customer.name,
+                type: 'party',
+            });
+            return {
+                id: account.id,
+                code: account.code,
+                name: account.name,
+                type: account.type,
+                active: account.active,
+                opening: account.opening ? Number(account.opening) : 0,
+            };
+        }
+        const driver = yield prisma_1.prisma.driver.findUnique({ where: { id: partyId } });
+        if (driver === null || driver === void 0 ? void 0 : driver.active) {
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'driver',
+                refId: driver.id,
+                name: driver.name,
+                type: 'party',
+            });
+            return {
+                id: account.id,
+                code: account.code,
+                name: account.name,
+                type: account.type,
+                active: account.active,
+                opening: account.opening ? Number(account.opening) : 0,
+            };
+        }
+        const investor = yield prisma_1.prisma.investor.findUnique({ where: { id: partyId } });
+        if (investor === null || investor === void 0 ? void 0 : investor.active) {
+            const account = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'investor',
+                refId: investor.id,
+                name: investor.name,
+                type: 'party',
+            });
+            return {
+                id: account.id,
+                code: account.code,
+                name: account.name,
+                type: account.type,
+                active: account.active,
+                opening: account.opening ? Number(account.opening) : 0,
+            };
+        }
+        throw new httpError_1.HttpError(404, 'Party not found');
     });
 }
 /**
@@ -208,50 +444,61 @@ function listAccounts(filterByType) {
     });
 }
 /**
- * Generate unique voucher number (YYYY-MM-DD-001 format)
+ * Generate unique voucher number (VCH-YYYYMMDD-001 format)
  */
 function generateVoucherNumber(vdate) {
     return __awaiter(this, void 0, void 0, function* () {
-        // Format: YYYYMMDD-001
-        const datePart = vdate.replace(/-/g, '');
-        // Find highest sequence for this date
-        const latestVoucher = yield prisma_1.prisma.voucher.findFirst({
-            where: {
-                voucherNo: {
-                    startsWith: datePart,
-                },
-            },
-            orderBy: {
-                voucherNo: 'desc',
-            },
-        });
-        let sequence = 1;
-        if (latestVoucher) {
-            const match = latestVoucher.voucherNo.match(/-(\d+)$/);
-            if (match) {
-                sequence = parseInt(match[1]) + 1;
-            }
-        }
-        return `${datePart}-${String(sequence).padStart(3, '0')}`;
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.voucher, 'voucherNo', 'VCH', new Date(`${vdate}T00:00:00.000Z`));
     });
 }
 /**
- * Validate that all accounts exist
+ * Resolve voucher row account references from either account.id or account.code.
  */
-function validateAccounts(rows) {
+function resolveVoucherRowAccounts(rows) {
     return __awaiter(this, void 0, void 0, function* () {
-        const accountIds = rows.map((r) => r.accountId);
-        const uniqueIds = [...new Set(accountIds)];
+        const requested = rows.map((r) => r.accountId);
+        const uniqueRequested = [...new Set(requested)];
         const foundAccounts = yield prisma_1.prisma.account.findMany({
-            where: { id: { in: uniqueIds } },
+            where: {
+                OR: [
+                    { id: { in: uniqueRequested } },
+                    { code: { in: uniqueRequested } },
+                ],
+            },
+            select: { id: true, code: true },
+        });
+        const accountIdByAnyKey = new Map();
+        for (const account of foundAccounts) {
+            accountIdByAnyKey.set(account.id, account.id);
+            accountIdByAnyKey.set(account.code, account.id);
+        }
+        return rows.map((row) => {
+            const resolvedId = accountIdByAnyKey.get(row.accountId);
+            if (!resolvedId) {
+                throw new httpError_1.HttpError(404, `Account not found: ${row.accountId}`);
+            }
+            return Object.assign(Object.assign({}, row), { accountId: resolvedId });
+        });
+    });
+}
+function round2(value) {
+    return Math.round(value * 100) / 100;
+}
+function ensureRoundingAccountId() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const account = yield prisma_1.prisma.account.upsert({
+            where: { code: 'AC-ROUND' },
+            update: {},
+            create: {
+                code: 'AC-ROUND',
+                name: 'Rounding Difference',
+                type: 'income',
+                active: true,
+                opening: 0,
+            },
             select: { id: true },
         });
-        const foundIds = new Set(foundAccounts.map((a) => a.id));
-        for (const id of uniqueIds) {
-            if (!foundIds.has(id)) {
-                throw new httpError_1.HttpError(404, `Account not found: ${id}`);
-            }
-        }
+        return account.id;
     });
 }
 /**
@@ -259,8 +506,28 @@ function validateAccounts(rows) {
  */
 function createVoucher(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        // Validate all accounts exist
-        yield validateAccounts(input.rows);
+        if (!Array.isArray(input.rows) || input.rows.length === 0) {
+            throw new httpError_1.HttpError(400, 'Voucher must contain at least one row');
+        }
+        const rows = input.rows.map((row) => ({
+            accountId: row.accountId,
+            dr: Number(row.dr || 0),
+            cr: Number(row.cr || 0),
+            memo: row.memo,
+        }));
+        const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
+        const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
+        const diff = round2(totalDr - totalCr);
+        if (Math.abs(diff) > 0.01) {
+            throw new httpError_1.HttpError(400, `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`);
+        }
+        if (Math.abs(diff) > 0) {
+            const roundingAccountId = yield ensureRoundingAccountId();
+            rows.push(diff > 0
+                ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
+                : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' });
+        }
+        const resolvedRows = yield resolveVoucherRowAccounts(rows);
         // Generate voucher number
         const voucherNo = yield generateVoucherNumber(input.vdate);
         // Parse date to ensure it's valid
@@ -276,7 +543,7 @@ function createVoucher(input) {
                 vdate,
                 narration: input.narration || `${input.vtype} voucher`,
                 rows: {
-                    create: input.rows.map((row) => ({
+                    create: resolvedRows.map((row) => ({
                         accountId: row.accountId,
                         dr: row.dr || 0,
                         cr: row.cr || 0,

@@ -1,6 +1,8 @@
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { PartyType } from '@prisma/client';
+import { ensurePartyAccount } from '../accounting/party-account';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import type {
   AccountDto,
   CreatePartyInput,
@@ -30,17 +32,29 @@ function normalizePartyType(input: string): PartyType {
   return 'OTHER';
 }
 
-async function generatePartyCode(type: string, name: string) {
-  const prefix = slugify(type).slice(0, 4) || 'PRTY';
-  const base = slugify(name) || 'PARTY';
+async function generatePartyCode(type: string) {
+  const typeTag = slugify(type).slice(0, 4) || 'PRTY';
+  return nextDailySequenceIdForDelegate(prisma.party, 'code', `PTY-${typeTag}`);
+}
 
-  for (let i = 0; i < 5; i += 1) {
-    const code = `${prefix}-${base}-${Date.now().toString().slice(-5)}${i}`.slice(0, 40);
-    const exists = await prisma.party.findUnique({ where: { code } });
-    if (!exists) return code;
-  }
+async function generateDriverId() {
+  return nextDailySequenceIdForDelegate(prisma.driver, 'id', 'DRV');
+}
 
-  return `${prefix}-${base}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase();
+async function generateInvestorId() {
+  return nextDailySequenceIdForDelegate(prisma.investor, 'id', 'INV');
+}
+
+function masterPartyCode(kind: string, id: string) {
+  const k = kind.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+  const r = id.trim().toUpperCase().replace(/[^A-Z0-9-]+/g, '-');
+  return `MST-${k}-${r}`.slice(0, 64);
+}
+
+function partyAccountCodeForPartyTable(type: string, partyCode: string) {
+  const normType = type.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+  const normCode = partyCode.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
+  return `PTY-${normType}-${normCode}`.slice(0, 64);
 }
 
 /**
@@ -53,6 +67,132 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
   }
 
   const type = normalizePartyType(input.type);
+
+  if (type === 'SELLER') {
+    const existingSeller = await prisma.seller.findFirst({
+      where: {
+        name: {
+          equals: name,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    const seller = existingSeller || await prisma.seller.create({ data: { name } });
+    const account = await ensurePartyAccount({
+      kind: 'seller',
+      refId: seller.id,
+      name: seller.name,
+      type: 'party',
+    });
+
+    return {
+      id: seller.id,
+      code: masterPartyCode('seller', seller.id),
+      name: seller.name,
+      type: 'seller',
+      active: true,
+      accountId: account.id,
+    };
+  }
+
+  if (type === 'CUSTOMER') {
+    const existingCustomer = await prisma.customer.findFirst({
+      where: {
+        name: {
+          equals: name,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    const customer = existingCustomer || await prisma.customer.create({ data: { name } });
+    const account = await ensurePartyAccount({
+      kind: 'customer',
+      refId: customer.id,
+      name: customer.name,
+      type: 'party',
+    });
+
+    return {
+      id: customer.id,
+      code: masterPartyCode('customer', customer.id),
+      name: customer.name,
+      type: 'customer',
+      active: true,
+      accountId: account.id,
+    };
+  }
+
+  if (type === 'DRIVER') {
+    const existingDriver = await prisma.driver.findFirst({
+      where: {
+        name: {
+          equals: name,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    const driver = existingDriver || await prisma.driver.create({
+      data: {
+        id: await generateDriverId(),
+        name,
+        active: true,
+      },
+    });
+
+    const account = await ensurePartyAccount({
+      kind: 'driver',
+      refId: driver.id,
+      name: driver.name,
+      type: 'party',
+    });
+
+    return {
+      id: driver.id,
+      code: masterPartyCode('driver', driver.id),
+      name: driver.name,
+      type: 'driver',
+      active: driver.active,
+      accountId: account.id,
+    };
+  }
+
+  if (type === 'INVESTOR') {
+    const existingInvestor = await prisma.investor.findFirst({
+      where: {
+        name: {
+          equals: name,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    const investor = existingInvestor || await prisma.investor.create({
+      data: {
+        id: await generateInvestorId(),
+        name,
+        active: true,
+      },
+    });
+
+    const account = await ensurePartyAccount({
+      kind: 'investor',
+      refId: investor.id,
+      name: investor.name,
+      type: 'party',
+    });
+
+    return {
+      id: investor.id,
+      code: masterPartyCode('investor', investor.id),
+      name: investor.name,
+      type: 'investor',
+      active: investor.active,
+      accountId: account.id,
+    };
+  }
 
   const existing = await prisma.party.findFirst({
     where: {
@@ -75,7 +215,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
     };
   }
 
-  const code = await generatePartyCode(type, name);
+  const code = await generatePartyCode(type);
 
   const created = await prisma.party.create({
     data: {
@@ -85,6 +225,14 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
       active: true,
     },
   });
+
+	await ensurePartyAccount({
+		kind: created.type.toLowerCase(),
+		refId: created.id,
+		name: created.name,
+    code: partyAccountCodeForPartyTable(created.type, created.code),
+		type: 'party',
+	});
 
   return {
     id: created.id,
@@ -103,45 +251,101 @@ export async function listParties(
   kind?: string,
 ): Promise<PartyDto[]> {
   const type = kind ? normalizePartyType(kind) : undefined;
+  const includeSellers = !type || type === 'SELLER';
+  const includeCustomers = !type || type === 'CUSTOMER';
+  const includeDrivers = !type || type === 'DRIVER';
+  const includeInvestors = !type || type === 'INVESTOR';
+  const includeGenericPartyTable = !type || ['MILL', 'EMPLOYEE', 'OTHER'].includes(type);
 
-  const parties = await prisma.party.findMany({
-    where: {
-      active: true,
-      ...(type ? { type } : {}),
-    },
-    orderBy: [{ type: 'asc' }, { name: 'asc' }],
-  });
+  const [sellers, customers, drivers, investors, parties, linkedAccounts] = await Promise.all([
+    includeSellers ? prisma.seller.findMany({ orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    includeCustomers ? prisma.customer.findMany({ orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    includeDrivers ? prisma.driver.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    includeInvestors ? prisma.investor.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    includeGenericPartyTable
+      ? prisma.party.findMany({
+          where: {
+            active: true,
+            ...(type ? { type } : {}),
+          },
+          orderBy: [{ type: 'asc' }, { name: 'asc' }],
+        })
+      : Promise.resolve([]),
+    prisma.account.findMany({
+      where: { type: 'party' },
+      select: { id: true, partyKind: true, partyRefId: true },
+    }),
+  ]);
 
-  const partyAccountCodes = parties.map((party) => partyAccountCode(party.type, party.code));
-  const linkedAccounts = partyAccountCodes.length
-    ? await prisma.account.findMany({
-        where: {
-          type: 'party',
-          code: { in: partyAccountCodes },
-        },
-        select: { id: true, code: true },
-      })
-    : [];
-
-  const accountByCode = new Map<string, string>();
+  const accountByRef = new Map<string, string>();
   for (const account of linkedAccounts) {
-    accountByCode.set(account.code, account.id);
+    const k = `${(account.partyKind || '').toLowerCase()}:${account.partyRefId || ''}`;
+    if (account.partyKind && account.partyRefId && !accountByRef.has(k)) {
+      accountByRef.set(k, account.id);
+    }
   }
 
-  return parties.map((party) => ({
-    id: party.id,
-    code: party.code,
-    name: party.name,
-    type: party.type.toLowerCase(),
-    active: party.active,
-    accountId: accountByCode.get(partyAccountCode(party.type, party.code)),
-  }));
-}
+  const rows: PartyDto[] = [];
 
-function partyAccountCode(type: string, partyCode: string) {
-  const normType = type.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
-  const normCode = partyCode.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-');
-  return `PTY-${normType}-${normCode}`.slice(0, 64);
+  for (const seller of sellers) {
+    rows.push({
+      id: seller.id,
+      code: masterPartyCode('seller', seller.id),
+      name: seller.name,
+      type: 'seller',
+      active: true,
+      accountId: accountByRef.get(`seller:${seller.id}`),
+    });
+  }
+
+  for (const customer of customers) {
+    rows.push({
+      id: customer.id,
+      code: masterPartyCode('customer', customer.id),
+      name: customer.name,
+      type: 'customer',
+      active: true,
+      accountId: accountByRef.get(`customer:${customer.id}`),
+    });
+  }
+
+  for (const driver of drivers) {
+    rows.push({
+      id: driver.id,
+      code: masterPartyCode('driver', driver.id),
+      name: driver.name,
+      type: 'driver',
+      active: driver.active,
+      accountId: accountByRef.get(`driver:${driver.id}`),
+    });
+  }
+
+  for (const investor of investors) {
+    rows.push({
+      id: investor.id,
+      code: masterPartyCode('investor', investor.id),
+      name: investor.name,
+      type: 'investor',
+      active: investor.active,
+      accountId: accountByRef.get(`investor:${investor.id}`),
+    });
+  }
+
+  for (const party of parties) {
+    rows.push({
+      id: party.id,
+      code: party.code,
+      name: party.name,
+      type: party.type.toLowerCase(),
+      active: party.active,
+      accountId: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`),
+    });
+  }
+
+  return rows.sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /**
@@ -150,47 +354,102 @@ function partyAccountCode(type: string, partyCode: string) {
  */
 export async function resolvePartyAccount(partyId: string): Promise<AccountDto> {
   const party = await prisma.party.findUnique({ where: { id: partyId } });
-  if (!party || !party.active) {
-    throw new HttpError(404, 'Party not found');
-  }
-
-  const accountCode = partyAccountCode(party.type, party.code);
-  const existing = await prisma.account.findFirst({
-    where: {
+  if (party?.active) {
+    const account = await ensurePartyAccount({
+      kind: party.type.toLowerCase(),
+      refId: party.id,
+      name: party.name,
+      code: partyAccountCodeForPartyTable(party.type, party.code),
       type: 'party',
-      code: accountCode,
-    },
-  });
+    });
 
-  if (existing) {
     return {
-      id: existing.id,
-      code: existing.code,
-      name: existing.name,
-      type: existing.type,
-      active: existing.active,
-      opening: existing.opening ? Number(existing.opening) : 0,
+      id: account.id,
+      code: account.code,
+      name: account.name,
+      type: account.type,
+      active: account.active,
+      opening: account.opening ? Number(account.opening) : 0,
     };
   }
 
-  const created = await prisma.account.create({
-    data: {
-      code: accountCode,
-      name: party.name,
+  const seller = await prisma.seller.findUnique({ where: { id: partyId } });
+  if (seller) {
+    const account = await ensurePartyAccount({
+      kind: 'seller',
+      refId: seller.id,
+      name: seller.name,
       type: 'party',
-      opening: 0,
-      active: true,
-    },
-  });
+    });
 
-  return {
-    id: created.id,
-    code: created.code,
-    name: created.name,
-    type: created.type,
-    active: created.active,
-    opening: created.opening ? Number(created.opening) : 0,
-  };
+    return {
+      id: account.id,
+      code: account.code,
+      name: account.name,
+      type: account.type,
+      active: account.active,
+      opening: account.opening ? Number(account.opening) : 0,
+    };
+  }
+
+  const customer = await prisma.customer.findUnique({ where: { id: partyId } });
+  if (customer) {
+    const account = await ensurePartyAccount({
+      kind: 'customer',
+      refId: customer.id,
+      name: customer.name,
+      type: 'party',
+    });
+
+    return {
+      id: account.id,
+      code: account.code,
+      name: account.name,
+      type: account.type,
+      active: account.active,
+      opening: account.opening ? Number(account.opening) : 0,
+    };
+  }
+
+  const driver = await prisma.driver.findUnique({ where: { id: partyId } });
+  if (driver?.active) {
+    const account = await ensurePartyAccount({
+      kind: 'driver',
+      refId: driver.id,
+      name: driver.name,
+      type: 'party',
+    });
+
+    return {
+      id: account.id,
+      code: account.code,
+      name: account.name,
+      type: account.type,
+      active: account.active,
+      opening: account.opening ? Number(account.opening) : 0,
+    };
+  }
+
+  const investor = await prisma.investor.findUnique({ where: { id: partyId } });
+  if (investor?.active) {
+    const account = await ensurePartyAccount({
+      kind: 'investor',
+      refId: investor.id,
+      name: investor.name,
+      type: 'party',
+    });
+
+    return {
+      id: account.id,
+      code: account.code,
+      name: account.name,
+      type: account.type,
+      active: account.active,
+      opening: account.opening ? Number(account.opening) : 0,
+    };
+  }
+
+  throw new HttpError(404, 'Party not found');
 }
 
 /**
@@ -218,54 +477,71 @@ export async function listAccounts(
 }
 
 /**
- * Generate unique voucher number (YYYY-MM-DD-001 format)
+ * Generate unique voucher number (VCH-YYYYMMDD-001 format)
  */
 async function generateVoucherNumber(vdate: string): Promise<string> {
-  // Format: YYYYMMDD-001
-  const datePart = vdate.replace(/-/g, '');
-
-  // Find highest sequence for this date
-  const latestVoucher = await prisma.voucher.findFirst({
-    where: {
-      voucherNo: {
-        startsWith: datePart,
-      },
-    },
-    orderBy: {
-      voucherNo: 'desc',
-    },
-  });
-
-  let sequence = 1;
-  if (latestVoucher) {
-    const match = latestVoucher.voucherNo.match(/-(\d+)$/);
-    if (match) {
-      sequence = parseInt(match[1]) + 1;
-    }
-  }
-
-  return `${datePart}-${String(sequence).padStart(3, '0')}`;
+  return nextDailySequenceIdForDelegate(
+    prisma.voucher,
+    'voucherNo',
+    'VCH',
+    new Date(`${vdate}T00:00:00.000Z`),
+  );
 }
 
 /**
- * Validate that all accounts exist
+ * Resolve voucher row account references from either account.id or account.code.
  */
-async function validateAccounts(rows: VoucherRowInput[]): Promise<void> {
-  const accountIds = rows.map((r) => r.accountId);
-  const uniqueIds = [...new Set(accountIds)];
+async function resolveVoucherRowAccounts(rows: VoucherRowInput[]): Promise<VoucherRowInput[]> {
+  const requested = rows.map((r) => r.accountId);
+  const uniqueRequested = [...new Set(requested)];
 
   const foundAccounts = await prisma.account.findMany({
-    where: { id: { in: uniqueIds } },
+    where: {
+      OR: [
+        { id: { in: uniqueRequested } },
+        { code: { in: uniqueRequested } },
+      ],
+    },
+    select: { id: true, code: true },
+  });
+
+  const accountIdByAnyKey = new Map<string, string>();
+  for (const account of foundAccounts) {
+    accountIdByAnyKey.set(account.id, account.id);
+    accountIdByAnyKey.set(account.code, account.id);
+  }
+
+  return rows.map((row) => {
+    const resolvedId = accountIdByAnyKey.get(row.accountId);
+    if (!resolvedId) {
+      throw new HttpError(404, `Account not found: ${row.accountId}`);
+    }
+    return {
+      ...row,
+      accountId: resolvedId,
+    };
+  });
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+async function ensureRoundingAccountId(): Promise<string> {
+  const account = await prisma.account.upsert({
+    where: { code: 'AC-ROUND' },
+    update: {},
+    create: {
+      code: 'AC-ROUND',
+      name: 'Rounding Difference',
+      type: 'income',
+      active: true,
+      opening: 0,
+    },
     select: { id: true },
   });
 
-  const foundIds = new Set(foundAccounts.map((a) => a.id));
-
-  for (const id of uniqueIds) {
-    if (!foundIds.has(id)) {
-      throw new HttpError(404, `Account not found: ${id}`);
-    }
-  }
+  return account.id;
 }
 
 /**
@@ -274,8 +550,38 @@ async function validateAccounts(rows: VoucherRowInput[]): Promise<void> {
 export async function createVoucher(
   input: CreateVoucherInput,
 ): Promise<VoucherDto> {
-  // Validate all accounts exist
-  await validateAccounts(input.rows);
+  if (!Array.isArray(input.rows) || input.rows.length === 0) {
+    throw new HttpError(400, 'Voucher must contain at least one row');
+  }
+
+  const rows: VoucherRowInput[] = input.rows.map((row) => ({
+    accountId: row.accountId,
+    dr: Number(row.dr || 0),
+    cr: Number(row.cr || 0),
+    memo: row.memo,
+  }));
+
+  const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
+  const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
+  const diff = round2(totalDr - totalCr);
+
+  if (Math.abs(diff) > 0.01) {
+    throw new HttpError(
+      400,
+      `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`,
+    );
+  }
+
+  if (Math.abs(diff) > 0) {
+    const roundingAccountId = await ensureRoundingAccountId();
+    rows.push(
+      diff > 0
+        ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
+        : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' },
+    );
+  }
+
+  const resolvedRows = await resolveVoucherRowAccounts(rows);
 
   // Generate voucher number
   const voucherNo = await generateVoucherNumber(input.vdate);
@@ -294,7 +600,7 @@ export async function createVoucher(
       vdate,
       narration: input.narration || `${input.vtype} voucher`,
       rows: {
-        create: input.rows.map((row) => ({
+        create: resolvedRows.map((row) => ({
           accountId: row.accountId,
           dr: row.dr || 0,
           cr: row.cr || 0,

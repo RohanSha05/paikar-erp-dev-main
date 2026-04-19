@@ -29,5 +29,7 @@ export interface InvestorTxn {
 export interface InvestorBalance {
   capital: number;
   profitPaid: number;
+  adjustment: number;
+  payout: number;
   net: number;
 }

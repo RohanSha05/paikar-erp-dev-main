@@ -428,7 +428,7 @@ model VoucherRow {
   voucher         Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
 
   accountId       String
-  account         Account   @relation(fields: [accountId], references: [id])
+  account         Account   @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
   dr              Decimal   @db.Decimal(18, 4)
   cr              Decimal   @db.Decimal(18, 4)

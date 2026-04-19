@@ -17,11 +17,22 @@ exports.confirmSalesOrder = confirmSalesOrder;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function soNo() {
-    return `SO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.salesOrder, 'soNo', 'SO');
+    });
 }
-function stockMoveNo() {
-    return `SM-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+function stockMoveNo(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.stockMove, 'moveNo', 'SM');
+    });
+}
+function voucherNo(tx_1) {
+    return __awaiter(this, arguments, void 0, function* (tx, date = new Date()) {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.voucher, 'voucherNo', 'VCH', date);
+    });
 }
 function ratePerKg(rateBasis, rateValue) {
     return rateBasis === 'perKg' ? rateValue : rateValue / 40;
@@ -111,7 +122,7 @@ function createSalesOrderDraft(input, userId) {
         const totals = buildTotals(input.items, input.transport, input.loadingUnloading, input.misc);
         return prisma_1.prisma.salesOrder.create({
             data: {
-                soNo: soNo(),
+                soNo: yield soNo(),
                 status: 'DRAFT',
                 customerId: input.customerId,
                 customerSnapshot,
@@ -204,6 +215,22 @@ function updateSalesOrderDraft(id, input) {
 }
 function confirmSalesOrder(id, userId) {
     return __awaiter(this, void 0, void 0, function* () {
+        const customerAccount = yield prisma_1.prisma.salesOrder.findUnique({
+            where: { id },
+            select: {
+                customer: {
+                    select: { id: true, name: true },
+                },
+            },
+        });
+        const customerAccountId = (customerAccount === null || customerAccount === void 0 ? void 0 : customerAccount.customer)
+            ? (yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'customer',
+                refId: customerAccount.customer.id,
+                name: customerAccount.customer.name,
+                type: 'party',
+            })).id
+            : null;
         return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
             const order = yield tx.salesOrder.findUnique({
                 where: { id },
@@ -244,10 +271,10 @@ function confirmSalesOrder(id, userId) {
                 });
                 yield tx.stockMove.create({
                     data: {
-                        moveNo: stockMoveNo(),
+                        moveNo: yield stockMoveNo(tx),
                         lotId: lot.id,
                         warehouseId: lot.warehouseId,
-                        qtyKg: new client_1.Prisma.Decimal(qtyKg),
+                        qtyKg: new client_1.Prisma.Decimal(-qtyKg),
                         reason: client_1.StockMoveReason.SALE,
                         refType: client_1.StockRefType.SO,
                         refId: order.id,
@@ -285,6 +312,40 @@ function confirmSalesOrder(id, userId) {
                     }
                 }
             });
+            if (customerAccountId) {
+                const incomeAccount = yield tx.account.upsert({
+                    where: { code: 'AC-INC' },
+                    update: {},
+                    create: { code: 'AC-INC', name: 'Income', type: 'income' },
+                });
+                const voucher = yield tx.voucher.create({
+                    data: {
+                        voucherNo: yield voucherNo(tx),
+                        vtype: 'journal',
+                        vdate: new Date(),
+                        narration: `Sales order ${order.soNo}`,
+                        salesOrderId: order.id,
+                    },
+                });
+                yield tx.voucherRow.createMany({
+                    data: [
+                        {
+                            voucherId: voucher.id,
+                            accountId: customerAccountId,
+                            dr: new client_1.Prisma.Decimal(totalsJson.total),
+                            cr: new client_1.Prisma.Decimal(0),
+                            memo: `SO ${order.soNo} receivable`,
+                        },
+                        {
+                            voucherId: voucher.id,
+                            accountId: incomeAccount.id,
+                            dr: new client_1.Prisma.Decimal(0),
+                            cr: new client_1.Prisma.Decimal(totalsJson.total),
+                            memo: `SO ${order.soNo} income`,
+                        },
+                    ],
+                });
+            }
             return {
                 salesOrder: updated,
                 totals: totalsJson,

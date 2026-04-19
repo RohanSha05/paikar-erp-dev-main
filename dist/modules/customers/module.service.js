@@ -15,6 +15,7 @@ exports.updateCustomer = updateCustomer;
 exports.deleteCustomer = deleteCustomer;
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
 function listCustomers() {
     return __awaiter(this, void 0, void 0, function* () {
         return prisma_1.prisma.customer.findMany({
@@ -24,19 +25,33 @@ function listCustomers() {
 }
 function createCustomer(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        return prisma_1.prisma.customer.create({ data: input });
+        const customer = yield prisma_1.prisma.customer.create({ data: input });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'customer',
+            refId: customer.id,
+            name: customer.name,
+            type: 'party',
+        });
+        return customer;
     });
 }
 function updateCustomer(id, input) {
     return __awaiter(this, void 0, void 0, function* () {
-        const customer = yield prisma_1.prisma.customer.findUnique({ where: { id } });
-        if (!customer) {
+        const existingCustomer = yield prisma_1.prisma.customer.findUnique({ where: { id } });
+        if (!existingCustomer) {
             throw new httpError_1.HttpError(404, 'Customer not found');
         }
-        return prisma_1.prisma.customer.update({
+        const updatedCustomer = yield prisma_1.prisma.customer.update({
             where: { id },
             data: input
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'customer',
+            refId: updatedCustomer.id,
+            name: updatedCustomer.name,
+            type: 'party',
+        });
+        return updatedCustomer;
     });
 }
 function deleteCustomer(id) {

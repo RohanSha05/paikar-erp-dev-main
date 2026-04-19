@@ -18,7 +18,9 @@ exports.getInvestorTxns = getInvestorTxns;
 exports.createInvestorTxn = createInvestorTxn;
 exports.getInvestorBalance = getInvestorBalance;
 const prisma_1 = require("../../db/prisma");
-const uid_1 = require("../../common/utils/uid");
+const party_account_1 = require("../accounting/party-account");
+const module_service_1 = require("../cashbook/module.service");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function listInvestors() {
     return __awaiter(this, void 0, void 0, function* () {
         return prisma_1.prisma.investor.findMany({
@@ -34,10 +36,10 @@ function getInvestor(id) {
 function createInvestor(data) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c;
-        const id = (0, uid_1.uid)('INV');
+        const id = yield (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.investor, 'id', 'INV');
         const effectiveNidNo = (_a = data.nidNo) !== null && _a !== void 0 ? _a : data.nid;
         const effectiveAgreementPct = (_b = data.agreementPct) !== null && _b !== void 0 ? _b : data.profitSharePct;
-        return prisma_1.prisma.investor.create({
+        const investor = yield prisma_1.prisma.investor.create({
             data: {
                 id,
                 name: data.name,
@@ -52,6 +54,13 @@ function createInvestor(data) {
                 active: (_c = data.active) !== null && _c !== void 0 ? _c : true,
             },
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'investor',
+            refId: investor.id,
+            name: investor.name,
+            type: 'party',
+        });
+        return investor;
     });
 }
 function updateInvestor(id, data) {
@@ -63,7 +72,7 @@ function updateInvestor(id, data) {
         const effectiveStartDate = typeof anyData.startDate === 'string'
             ? new Date(anyData.startDate)
             : anyData.startDate;
-        return prisma_1.prisma.investor.update({
+        const investor = yield prisma_1.prisma.investor.update({
             where: { id },
             data: {
                 name: data.name,
@@ -79,6 +88,13 @@ function updateInvestor(id, data) {
                 updatedAt: new Date(),
             },
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'investor',
+            refId: investor.id,
+            name: investor.name,
+            type: 'party',
+        });
+        return investor;
     });
 }
 function deleteInvestor(id) {
@@ -103,7 +119,53 @@ function getInvestorTxns(investorId) {
 }
 function createInvestorTxn(data) {
     return __awaiter(this, void 0, void 0, function* () {
-        const id = (0, uid_1.uid)('INVTX');
+        var _a;
+        const investor = yield prisma_1.prisma.investor.findUnique({ where: { id: data.investorId } });
+        if (!investor) {
+            throw new Error('Investor not found');
+        }
+        const investorAccount = yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'investor',
+            refId: investor.id,
+            name: investor.name,
+            type: 'party',
+        });
+        const amount = Number(data.amount || 0);
+        const payAccountId = data.payAccountId || data.instrument || 'AC-CASH';
+        const defaultMemoByKind = {
+            capitalIn: 'Capital In',
+            capitalOut: 'Capital Out',
+            profitPay: 'Profit Distribution',
+            adjustment: 'Adjustment',
+            payout: 'Payout',
+        };
+        const memo = ((_a = data.memo) === null || _a === void 0 ? void 0 : _a.trim()) || defaultMemoByKind[data.kind];
+        const rows = data.kind === 'capitalIn'
+            ? [
+                { accountId: payAccountId, dr: amount, cr: 0, memo },
+                { accountId: investorAccount.id, dr: 0, cr: amount, memo },
+            ]
+            : data.kind === 'adjustment'
+                ? [
+                    { accountId: investorAccount.id, dr: amount, cr: 0, memo },
+                    { accountId: 'AC-EXP', dr: 0, cr: amount, memo: memo || 'Investor adjustment expense' },
+                ]
+                : [
+                    { accountId: investorAccount.id, dr: amount, cr: 0, memo },
+                    { accountId: payAccountId, dr: 0, cr: amount, memo },
+                ];
+        const voucher = yield (0, module_service_1.createVoucher)({
+            vtype: 'journal',
+            vdate: data.date,
+            narration: `Investor ${data.kind}: ${memo} - ${investor.name}`,
+            rows: rows.map((row) => ({
+                accountId: row.accountId,
+                dr: row.dr,
+                cr: row.cr,
+                memo: row.memo,
+            })),
+        });
+        const id = yield (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.investorTxn, 'id', 'INVTX');
         return prisma_1.prisma.investorTxn.create({
             data: {
                 id,
@@ -111,9 +173,9 @@ function createInvestorTxn(data) {
                 kind: data.kind,
                 date: new Date(data.date),
                 amount: data.amount,
-                instrument: data.instrument,
+                instrument: data.instrument || payAccountId,
                 memo: data.memo,
-                voucherId: data.voucherId,
+                voucherId: voucher.id,
             },
         });
     });
@@ -123,6 +185,8 @@ function getInvestorBalance(investorId) {
         const txns = yield getInvestorTxns(investorId);
         let capital = 0;
         let profitPaid = 0;
+        let adjustment = 0;
+        let payout = 0;
         for (const t of txns) {
             if (t.kind === 'capitalIn')
                 capital += t.amount;
@@ -130,11 +194,17 @@ function getInvestorBalance(investorId) {
                 capital -= t.amount;
             if (t.kind === 'profitPay')
                 profitPaid += t.amount;
+            if (t.kind === 'adjustment')
+                adjustment += t.amount;
+            if (t.kind === 'payout')
+                payout += t.amount;
         }
         return {
             capital: Math.round(capital * 100) / 100,
             profitPaid: Math.round(profitPaid * 100) / 100,
-            net: Math.round((capital - profitPaid) * 100) / 100,
+            adjustment: Math.round(adjustment * 100) / 100,
+            payout: Math.round(payout * 100) / 100,
+            net: Math.round((capital - profitPaid - adjustment - payout) * 100) / 100,
         };
     });
 }

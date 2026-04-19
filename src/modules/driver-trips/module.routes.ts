@@ -22,4 +22,11 @@ router.patch(
 	controller.update
 );
 
+router.post(
+	'/:id/settle',
+	requireAuth,
+	requireRole(['ADMIN', 'OPERATOR']),
+	controller.settle
+);
+
 export default router;

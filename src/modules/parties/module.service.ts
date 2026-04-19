@@ -1,6 +1,7 @@
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreatePartyInput, UpdatePartyInput } from './module.types';
+import { ensurePartyAccount } from '../accounting/party-account';
 
 export async function listParties() {
 	return prisma.seller.findMany({
@@ -9,19 +10,35 @@ export async function listParties() {
 }
 
 export async function createParty(input: CreatePartyInput) {
-	return prisma.seller.create({ data: input });
+	const seller = await prisma.seller.create({ data: input });
+	await ensurePartyAccount({
+		kind: 'seller',
+		refId: seller.id,
+		name: seller.name,
+		type: 'party',
+	});
+	return seller;
 }
 
 export async function updateParty(id: string, input: UpdatePartyInput) {
-	const seller = await prisma.seller.findUnique({ where: { id } });
-	if (!seller) {
+	const existingSeller = await prisma.seller.findUnique({ where: { id } });
+	if (!existingSeller) {
 		throw new HttpError(404, 'Party not found');
 	}
 
-	return prisma.seller.update({
+	const updatedSeller = await prisma.seller.update({
 		where: { id },
 		data: input
 	});
+
+	await ensurePartyAccount({
+		kind: 'seller',
+		refId: updatedSeller.id,
+		name: updatedSeller.name,
+		type: 'party',
+	});
+
+	return updatedSeller;
 }
 
 export async function deleteParty(id: string) {

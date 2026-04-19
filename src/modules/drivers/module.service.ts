@@ -1,13 +1,15 @@
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateDriverInput, UpdateDriverInput } from './module.types';
+import { ensurePartyAccount } from '../accounting/party-account';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 
 function normalize(value?: string) {
 	return value?.trim() || undefined;
 }
 
-function generateDriverId() {
-	return `DRV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+async function generateDriverId() {
+	return nextDailySequenceIdForDelegate(prisma.driver, 'id', 'DRV');
 }
 
 export async function listDrivers() {
@@ -17,13 +19,13 @@ export async function listDrivers() {
 }
 
 export async function createDriver(input: CreateDriverInput) {
-	const id = normalize(input.id) || generateDriverId();
+	const id = normalize(input.id) || await generateDriverId();
 	const exists = await prisma.driver.findUnique({ where: { id } });
 	if (exists) {
 		throw new HttpError(409, 'Driver ID already exists');
 	}
 
-	return prisma.driver.create({
+	const driver = await prisma.driver.create({
 		data: {
 			id,
 			name: input.name.trim(),
@@ -33,6 +35,15 @@ export async function createDriver(input: CreateDriverInput) {
 			active: input.active !== false
 		}
 	});
+
+	await ensurePartyAccount({
+		kind: 'driver',
+		refId: driver.id,
+		name: driver.name,
+		type: 'party',
+	});
+
+	return driver;
 }
 
 export async function updateDriver(id: string, input: UpdateDriverInput) {
@@ -41,7 +52,7 @@ export async function updateDriver(id: string, input: UpdateDriverInput) {
 		throw new HttpError(404, 'Driver not found');
 	}
 
-	return prisma.driver.update({
+	const driver = await prisma.driver.update({
 		where: { id },
 		data: {
 			name: input.name?.trim(),
@@ -51,4 +62,13 @@ export async function updateDriver(id: string, input: UpdateDriverInput) {
 			active: input.active
 		}
 	});
+
+	await ensurePartyAccount({
+		kind: 'driver',
+		refId: driver.id,
+		name: driver.name,
+		type: 'party',
+	});
+
+	return driver;
 }

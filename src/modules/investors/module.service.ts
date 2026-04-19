@@ -1,6 +1,8 @@
 import { prisma } from '../../db/prisma';
 import { Investor, InvestorTxn, InvestorBalance } from './module.types';
-import { uid } from '../../common/utils/uid';
+import { ensurePartyAccount } from '../accounting/party-account';
+import { createVoucher } from '../cashbook/module.service';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 
 export async function listInvestors(): Promise<Investor[]> {
   return prisma.investor.findMany({
@@ -26,10 +28,10 @@ export async function createInvestor(data: {
   notes?: string;
   active?: boolean;
 }): Promise<Investor> {
-  const id = uid('INV');
+  const id = await nextDailySequenceIdForDelegate(prisma.investor, 'id', 'INV');
   const effectiveNidNo = data.nidNo ?? data.nid;
   const effectiveAgreementPct = data.agreementPct ?? data.profitSharePct;
-  return prisma.investor.create({
+  const investor = await prisma.investor.create({
     data: {
       id,
       name: data.name,
@@ -44,6 +46,15 @@ export async function createInvestor(data: {
       active: data.active ?? true,
     },
   });
+
+  await ensurePartyAccount({
+    kind: 'investor',
+    refId: investor.id,
+    name: investor.name,
+    type: 'party',
+  });
+
+  return investor;
 }
 
 export async function updateInvestor(id: string, data: Partial<Investor>): Promise<Investor | null> {
@@ -60,7 +71,7 @@ export async function updateInvestor(id: string, data: Partial<Investor>): Promi
       ? new Date(anyData.startDate)
       : anyData.startDate;
 
-  return prisma.investor.update({
+  const investor = await prisma.investor.update({
     where: { id },
     data: {
       name: data.name,
@@ -76,6 +87,15 @@ export async function updateInvestor(id: string, data: Partial<Investor>): Promi
       updatedAt: new Date(),
     },
   });
+
+  await ensurePartyAccount({
+    kind: 'investor',
+    refId: investor.id,
+    name: investor.name,
+    type: 'party',
+  });
+
+  return investor;
 }
 
 export async function deleteInvestor(id: string): Promise<boolean> {
@@ -103,8 +123,60 @@ export async function createInvestorTxn(data: {
   instrument?: string;
   memo?: string;
   voucherId?: string;
+  payAccountId?: string;
 }): Promise<InvestorTxn> {
-  const id = uid('INVTX');
+  const investor = await prisma.investor.findUnique({ where: { id: data.investorId } });
+  if (!investor) {
+    throw new Error('Investor not found');
+  }
+
+  const investorAccount = await ensurePartyAccount({
+    kind: 'investor',
+    refId: investor.id,
+    name: investor.name,
+    type: 'party',
+  });
+
+  const amount = Number(data.amount || 0);
+  const payAccountId = data.payAccountId || data.instrument || 'AC-CASH';
+  const defaultMemoByKind: Record<typeof data.kind, string> = {
+    capitalIn: 'Capital In',
+    capitalOut: 'Capital Out',
+    profitPay: 'Profit Distribution',
+    adjustment: 'Adjustment',
+    payout: 'Payout',
+  };
+  const memo = data.memo?.trim() || defaultMemoByKind[data.kind];
+
+  const rows =
+    data.kind === 'capitalIn'
+      ? [
+          { accountId: payAccountId, dr: amount, cr: 0, memo },
+          { accountId: investorAccount.id, dr: 0, cr: amount, memo },
+        ]
+      : data.kind === 'adjustment'
+        ? [
+            { accountId: investorAccount.id, dr: amount, cr: 0, memo },
+            { accountId: 'AC-EXP', dr: 0, cr: amount, memo: memo || 'Investor adjustment expense' },
+          ]
+        : [
+            { accountId: investorAccount.id, dr: amount, cr: 0, memo },
+            { accountId: payAccountId, dr: 0, cr: amount, memo },
+          ];
+
+  const voucher = await createVoucher({
+    vtype: 'journal',
+    vdate: data.date,
+    narration: `Investor ${data.kind}: ${memo} - ${investor.name}`,
+    rows: rows.map((row) => ({
+      accountId: row.accountId,
+      dr: row.dr,
+      cr: row.cr,
+      memo: row.memo,
+    })),
+  });
+
+  const id = await nextDailySequenceIdForDelegate(prisma.investorTxn, 'id', 'INVTX');
   return prisma.investorTxn.create({
     data: {
       id,
@@ -112,9 +184,9 @@ export async function createInvestorTxn(data: {
       kind: data.kind,
       date: new Date(data.date),
       amount: data.amount,
-      instrument: data.instrument,
+      instrument: data.instrument || payAccountId,
       memo: data.memo,
-      voucherId: data.voucherId,
+      voucherId: voucher.id,
     },
   });
 }
@@ -124,16 +196,22 @@ export async function getInvestorBalance(investorId: string): Promise<InvestorBa
 
   let capital = 0;
   let profitPaid = 0;
+  let adjustment = 0;
+  let payout = 0;
 
   for (const t of txns) {
     if (t.kind === 'capitalIn') capital += t.amount;
     if (t.kind === 'capitalOut') capital -= t.amount;
     if (t.kind === 'profitPay') profitPaid += t.amount;
+    if (t.kind === 'adjustment') adjustment += t.amount;
+    if (t.kind === 'payout') payout += t.amount;
   }
 
   return {
     capital: Math.round(capital * 100) / 100,
     profitPaid: Math.round(profitPaid * 100) / 100,
-    net: Math.round((capital - profitPaid) * 100) / 100,
+    adjustment: Math.round(adjustment * 100) / 100,
+    payout: Math.round(payout * 100) / 100,
+    net: Math.round((capital - profitPaid - adjustment - payout) * 100) / 100,
   };
 }

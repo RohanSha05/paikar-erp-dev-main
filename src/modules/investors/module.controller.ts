@@ -111,6 +111,7 @@ export async function postTxn(req: Request, res: Response, next: any) {
       amount,
       instrument,
       memo,
+      payAccountId,
     });
 
     res.status(201).json({

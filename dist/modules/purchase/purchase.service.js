@@ -15,30 +15,36 @@ exports.createDraft = createDraft;
 exports.updatePurchaseOrderDraft = updatePurchaseOrderDraft;
 exports.approvePurchaseOrder = approvePurchaseOrder;
 const client_1 = require("@prisma/client");
-const crypto_1 = require("crypto");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 const KG_PER_MON = 40;
 function ratePerKg(rateBasis, rateValue) {
     return rateBasis === 'perKg' ? rateValue : rateValue / KG_PER_MON;
 }
-function uniqueSuffix() {
-    return (0, crypto_1.randomUUID)().replace(/-/g, '').slice(0, 10);
+function lotNo(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.lot, 'lotNo', 'LOT');
+    });
 }
-function lotNo() {
-    return `LOT-${Date.now()}-${uniqueSuffix()}`;
+function stockMoveNo(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.stockMove, 'moveNo', 'MV');
+    });
 }
-function stockMoveNo() {
-    return `MV-${Date.now()}-${uniqueSuffix()}`;
-}
-function voucherNo() {
-    return `VCH-${Date.now()}-${uniqueSuffix()}`;
+function voucherNo(tx_1) {
+    return __awaiter(this, arguments, void 0, function* (tx, date = new Date()) {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.voucher, 'voucherNo', 'VCH', date);
+    });
 }
 function poNo() {
-    return `PO-${Date.now()}-${uniqueSuffix()}`;
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.purchaseOrder, 'poNo', 'PO');
+    });
 }
-function lotLabel(poNoValue, productId, warehouseId) {
-    return `LOT-${poNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}-${uniqueSuffix()}`;
+function lotLabel(lotNoValue, productId, warehouseId) {
+    return `${lotNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}`;
 }
 function resolveItemDisplayName(item, productName) {
     var _a, _b;
@@ -78,8 +84,80 @@ function computePurchaseTotals(order) {
         totalCost,
     };
 }
+function computeInitialStockKg(order) {
+    const items = Array.isArray(order === null || order === void 0 ? void 0 : order.items) ? order.items : [];
+    return items.reduce((sum, item) => {
+        const bags = numberValue(item === null || item === void 0 ? void 0 : item.bagCount);
+        const actualKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.actualKgPerBag);
+        const accountingKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.accountingKgPerBag);
+        const stockKg = (item === null || item === void 0 ? void 0 : item.weightPolicy) === 'actual' ? actualKg : accountingKg;
+        return sum + stockKg;
+    }, 0);
+}
+function computeRemainingStockKg(order) {
+    const lots = Array.isArray(order === null || order === void 0 ? void 0 : order.lots) ? order.lots : [];
+    if (!lots.length) {
+        return (order === null || order === void 0 ? void 0 : order.status) === 'DRAFT' ? computeInitialStockKg(order) : 0;
+    }
+    return lots.reduce((sum, lot) => sum + numberValue(lot === null || lot === void 0 ? void 0 : lot.availableKg), 0);
+}
+function computeSoldState(order, initialStockKg, remainingStockKg) {
+    if ((order === null || order === void 0 ? void 0 : order.status) !== 'APPROVED')
+        return 'none';
+    const eps = 0.00001;
+    if (remainingStockKg <= eps)
+        return 'full';
+    if (remainingStockKg + eps < initialStockKg)
+        return 'partial';
+    return 'none';
+}
+function postPurchaseAdvance(tx, po) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const advancePaid = numberValue(po.advancePaid);
+        if (!(advancePaid > 0)) {
+            return;
+        }
+        const sellerAccount = yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'seller',
+            refId: po.seller.id,
+            name: po.seller.name,
+            type: 'party',
+        });
+        const instrumentAccountId = po.advanceInstrumentId || 'AC-CASH';
+        const voucher = yield tx.voucher.create({
+            data: {
+                voucherNo: yield voucherNo(tx),
+                vtype: 'payment',
+                vdate: new Date(),
+                narration: `Advance for PO ${po.poNo}`,
+                purchaseOrderId: po.id,
+            },
+        });
+        yield tx.voucherRow.createMany({
+            data: [
+                {
+                    voucherId: voucher.id,
+                    accountId: sellerAccount.id,
+                    dr: new client_1.Prisma.Decimal(advancePaid),
+                    cr: new client_1.Prisma.Decimal(0),
+                    memo: `Advance on PO ${po.poNo}`,
+                },
+                {
+                    voucherId: voucher.id,
+                    accountId: instrumentAccountId,
+                    dr: new client_1.Prisma.Decimal(0),
+                    cr: new client_1.Prisma.Decimal(advancePaid),
+                    memo: `Advance on PO ${po.poNo}`,
+                },
+            ],
+        });
+    });
+}
 function toPurchaseOrderDto(order) {
     const totals = computePurchaseTotals(order);
+    const initialStockKg = computeInitialStockKg(order);
+    const remainingStockKg = computeRemainingStockKg(order);
+    const soldState = computeSoldState(order, initialStockKg, remainingStockKg);
     return Object.assign(Object.assign({}, order), { sellerSnapshot: (order === null || order === void 0 ? void 0 : order.seller)
             ? {
                 id: order.seller.id,
@@ -89,7 +167,9 @@ function toPurchaseOrderDto(order) {
                 market: order.seller.market,
                 phone: order.seller.phone,
             }
-            : order === null || order === void 0 ? void 0 : order.sellerSnapshot, totals: Object.assign(Object.assign({}, ((order === null || order === void 0 ? void 0 : order.totals) || {})), totals), totalCost: totals.totalCost });
+            : order === null || order === void 0 ? void 0 : order.sellerSnapshot, totals: Object.assign(Object.assign({}, ((order === null || order === void 0 ? void 0 : order.totals) || {})), totals), totalCost: totals.totalCost, initialStockKg,
+        remainingStockKg,
+        soldState });
 }
 function listPurchaseOrders() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -97,7 +177,14 @@ function listPurchaseOrders() {
             include: {
                 seller: true,
                 warehouse: true,
-                items: true
+                items: true,
+                lots: {
+                    select: {
+                        id: true,
+                        availableKg: true,
+                        sourcePoItemId: true,
+                    },
+                },
             },
             orderBy: { createdAt: 'desc' }
         });
@@ -111,7 +198,23 @@ function getPurchaseOrderById(id) {
             include: {
                 seller: true,
                 warehouse: true,
-                items: true
+                items: true,
+                lots: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                        warehouse: {
+                            select: {
+                                id: true,
+                                name: true,
+                            },
+                        },
+                    },
+                },
             }
         });
         if (!order) {
@@ -137,7 +240,7 @@ function createDraft(input) {
         const productNameById = new Map(products.map((product) => [product.id, product.name]));
         return prisma_1.prisma.purchaseOrder.create({
             data: {
-                poNo: poNo(),
+                poNo: yield poNo(),
                 status: 'DRAFT',
                 purchaseType: input.purchaseType,
                 sellerId: input.sellerId,
@@ -146,6 +249,8 @@ function createDraft(input) {
                 loading: new client_1.Prisma.Decimal(input.loading),
                 loadingUnloading: new client_1.Prisma.Decimal(input.loadingUnloading),
                 misc: new client_1.Prisma.Decimal(input.misc),
+                advancePaid: new client_1.Prisma.Decimal(input.advancePaid || 0),
+                advanceInstrumentId: input.advanceInstrumentId,
                 bagCostMode: input.bagCostMode,
                 bagCostPerBag: new client_1.Prisma.Decimal(input.bagCostPerBag),
                 remarks: input.remarks,
@@ -215,6 +320,8 @@ function updatePurchaseOrderDraft(id, input) {
                     loading: new client_1.Prisma.Decimal(input.loading),
                     loadingUnloading: new client_1.Prisma.Decimal(input.loadingUnloading),
                     misc: new client_1.Prisma.Decimal(input.misc),
+                    advancePaid: new client_1.Prisma.Decimal(input.advancePaid || 0),
+                    advanceInstrumentId: input.advanceInstrumentId,
                     bagCostMode: input.bagCostMode,
                     bagCostPerBag: new client_1.Prisma.Decimal(input.bagCostPerBag),
                     remarks: input.remarks,
@@ -303,10 +410,11 @@ function approvePurchaseOrder(id) {
                 basePurchase += lineBase;
                 const lineCost = lineBase + item.bagCount * bagCostPerBag;
                 const avgCostPerKg = stockKg > 0 ? lineCost / stockKg : 0;
+                const nextLotNo = yield lotNo(tx);
                 const lot = yield tx.lot.create({
                     data: {
-                        lotNo: lotNo(),
-                        label: lotLabel(po.poNo, item.productId, po.warehouseId),
+                        lotNo: nextLotNo,
+                        label: lotLabel(nextLotNo, item.productId, po.warehouseId),
                         productId: item.productId,
                         warehouseId: po.warehouseId,
                         availableKg: new client_1.Prisma.Decimal(stockKg),
@@ -317,7 +425,7 @@ function approvePurchaseOrder(id) {
                 });
                 yield tx.stockMove.create({
                     data: {
-                        moveNo: stockMoveNo(),
+                        moveNo: yield stockMoveNo(tx),
                         lotId: lot.id,
                         warehouseId: po.warehouseId,
                         qtyKg: new client_1.Prisma.Decimal(stockKg),
@@ -335,14 +443,15 @@ function approvePurchaseOrder(id) {
                 update: {},
                 create: { code: 'AC-INVENTORY', name: 'Inventory', type: 'asset' }
             });
-            const payableAccount = yield tx.account.upsert({
-                where: { code: 'AC-PAYABLES' },
-                update: {},
-                create: { code: 'AC-PAYABLES', name: 'Payables', type: 'liability' }
+            const sellerAccount = yield (0, party_account_1.ensurePartyAccount)({
+                kind: 'seller',
+                refId: po.seller.id,
+                name: po.seller.name,
+                type: 'party',
             });
             const voucher = yield tx.voucher.create({
                 data: {
-                    voucherNo: voucherNo(),
+                    voucherNo: yield voucherNo(tx),
                     vtype: 'journal',
                     vdate: new Date(),
                     narration: `Auto purchase approval for ${po.poNo}`,
@@ -360,13 +469,14 @@ function approvePurchaseOrder(id) {
                     },
                     {
                         voucherId: voucher.id,
-                        accountId: payableAccount.id,
+                        accountId: sellerAccount.id,
                         dr: new client_1.Prisma.Decimal(0),
                         cr: new client_1.Prisma.Decimal(totalCost),
                         memo: `PO ${po.poNo} payable`
                     }
                 ]
             });
+            yield postPurchaseAdvance(tx, po);
             const updated = yield tx.purchaseOrder.update({
                 where: { id: po.id },
                 data: { status: 'APPROVED' },

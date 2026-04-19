@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
-import { createVoucher } from '../cashbook/module.service';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import type {
 	CreateRecurringTemplateInput,
 	RecurringTemplateDto,
@@ -87,50 +87,95 @@ function monthDate(year: number, month: number, dayOfMonth?: number) {
 	return date.toISOString().slice(0, 10);
 }
 
+async function resolveAccountIdByCodeOrId(tx: Prisma.TransactionClient, value: string) {
+	const key = value.trim();
+	if (!key) {
+		throw new HttpError(400, 'Account reference is required');
+	}
+
+	const account = await tx.account.findFirst({
+		where: {
+			OR: [{ id: key }, { code: key }],
+		},
+		select: { id: true },
+	});
+
+	if (!account) {
+		throw new HttpError(404, `Account not found: ${key}`);
+	}
+
+	return account.id;
+}
+
 export async function postRecurringTemplate(id: string, year: number, month: number) {
-	const template = await prisma.recurringExpenseTemplate.findUnique({ where: { id } });
-	if (!template) {
-		throw new HttpError(404, 'Recurring template not found');
-	}
+	return prisma.$transaction(async (tx) => {
+		const template = await tx.recurringExpenseTemplate.findUnique({ where: { id } });
+		if (!template) {
+			throw new HttpError(404, 'Recurring template not found');
+		}
 
-	const duplicate = await prisma.recurringExpensePost.findUnique({
-		where: { templateId_year_month: { templateId: id, year, month } },
-	});
-	if (duplicate) {
-		throw new HttpError(409, 'Recurring template already posted for this month');
-	}
+		const duplicate = await tx.recurringExpensePost.findUnique({
+			where: { templateId_year_month: { templateId: id, year, month } },
+		});
+		if (duplicate) {
+			throw new HttpError(409, 'Recurring template already posted for this month');
+		}
 
-	if (!template.payFromAccountId) {
-		throw new HttpError(400, 'Pay from account is required');
-	}
+		if (!template.payFromAccountId) {
+			throw new HttpError(400, 'Pay from account is required');
+		}
 
-	const voucher = await createVoucher({
-		vtype: 'journal',
-		vdate: monthDate(year, month, template.dayOfMonth || 1),
-		narration: `Recurring: ${template.name}`,
-		rows: [
-			{ accountId: template.expenseAccountId, dr: toNumber(template.amount), cr: 0, memo: template.name },
-			{ accountId: template.payFromAccountId, dr: 0, cr: toNumber(template.amount), memo: template.name },
-		],
-	});
+		const expenseAccountId = await resolveAccountIdByCodeOrId(tx, template.expenseAccountId);
+		const payFromAccountId = await resolveAccountIdByCodeOrId(tx, template.payFromAccountId);
+		const voucherDateText = monthDate(year, month, template.dayOfMonth || 1);
+		const voucherDate = new Date(`${voucherDateText}T00:00:00.000Z`);
 
-	await prisma.recurringExpensePost.create({
-		data: {
-			templateId: template.id,
-			year,
-			month,
+		const voucher = await tx.voucher.create({
+			data: {
+				voucherNo: await nextDailySequenceIdForDelegate(tx.voucher, 'voucherNo', 'VCH', voucherDate),
+				vtype: 'journal',
+				vdate: voucherDate,
+				narration: `Recurring: ${template.name}`,
+			},
+		});
+
+		await tx.voucherRow.createMany({
+			data: [
+				{
+					voucherId: voucher.id,
+					accountId: expenseAccountId,
+					dr: new Prisma.Decimal(toNumber(template.amount)),
+					cr: new Prisma.Decimal(0),
+					memo: template.name,
+				},
+				{
+					voucherId: voucher.id,
+					accountId: payFromAccountId,
+					dr: new Prisma.Decimal(0),
+					cr: new Prisma.Decimal(toNumber(template.amount)),
+					memo: template.name,
+				},
+			],
+		});
+
+		await tx.recurringExpensePost.create({
+			data: {
+				templateId: template.id,
+				year,
+				month,
+				voucherId: voucher.id,
+				voucherNo: voucher.voucherNo,
+			},
+		});
+
+		await tx.recurringExpenseTemplate.update({
+			where: { id: template.id },
+			data: { lastPostedDate: new Date() },
+		});
+
+		return {
 			voucherId: voucher.id,
 			voucherNo: voucher.voucherNo,
-		},
+		};
 	});
-
-	await prisma.recurringExpenseTemplate.update({
-		where: { id: template.id },
-		data: { lastPostedDate: new Date() },
-	});
-
-	return {
-		voucherId: voucher.id,
-		voucherNo: voucher.voucherNo,
-	};
 }

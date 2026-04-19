@@ -20,6 +20,7 @@ const module_routes_9 = __importDefault(require("../modules/accounting/module.ro
 const module_routes_10 = __importDefault(require("../modules/recurring/module.routes"));
 const module_routes_11 = __importDefault(require("../modules/cashbook/module.routes"));
 const module_routes_12 = __importDefault(require("../modules/investors/module.routes"));
+const module_routes_13 = __importDefault(require("../modules/reports/module.routes"));
 const router = (0, express_1.Router)();
 router.get('/health', (_req, res) => {
     res.json({ success: true, message: 'OK' });
@@ -40,4 +41,5 @@ router.use('/accounting', module_routes_9.default);
 router.use('/recurring', module_routes_10.default);
 router.use('/cashbook', module_routes_11.default);
 router.use('/investors', module_routes_12.default);
+router.use('/reports', module_routes_13.default);
 exports.default = router;

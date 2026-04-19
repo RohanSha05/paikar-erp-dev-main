@@ -16,20 +16,72 @@ exports.getStockCard = getStockCard;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
-function moveNo() {
-    return `MV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+const sequence_id_1 = require("../../common/utils/sequence-id");
+function moveNo(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.stockMove, 'moveNo', 'MV');
+    });
 }
-function transferRef() {
-    return `TRF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+function transferRef(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.stockMove, 'refId', 'TRF');
+    });
 }
-function adjustmentRef() {
-    return `ADJ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+function adjustmentRef(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.stockMove, 'refId', 'ADJ');
+    });
 }
-function transferLotNo() {
-    return `LOT-TRF-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+function transferLotNo(tx) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.lot, 'lotNo', 'LOT-TRF');
+    });
 }
-function transferLotLabel(productId, warehouseId) {
-    return `LOT-TRF-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}-${Date.now()}`;
+function transferLotLabel(lotNoValue, productId, warehouseId) {
+    return `${lotNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}`;
+}
+function ensureSystemAccountByCode(tx_1, code_1, name_1) {
+    return __awaiter(this, arguments, void 0, function* (tx, code, name, type = 'asset') {
+        return tx.account.upsert({
+            where: { code },
+            update: {},
+            create: {
+                code,
+                name,
+                type,
+                opening: new client_1.Prisma.Decimal(0),
+                active: true,
+            },
+        });
+    });
+}
+function generateVoucherNo(tx, vdate) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.voucher, 'voucherNo', 'VCH', vdate);
+    });
+}
+function createInventoryVoucher(tx, input) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const voucherNo = yield generateVoucherNo(tx, input.vdate);
+        const voucher = yield tx.voucher.create({
+            data: {
+                voucherNo,
+                vtype: 'journal',
+                vdate: input.vdate,
+                narration: input.narration,
+            },
+        });
+        yield tx.voucherRow.createMany({
+            data: input.rows.map((row) => ({
+                voucherId: voucher.id,
+                accountId: row.accountId,
+                dr: new client_1.Prisma.Decimal(row.dr || 0),
+                cr: new client_1.Prisma.Decimal(row.cr || 0),
+                memo: row.memo,
+            })),
+        });
+        return voucher;
+    });
 }
 function adjustStock(input) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -50,20 +102,43 @@ function adjustStock(input) {
             });
             const move = yield tx.stockMove.create({
                 data: {
-                    moveNo: moveNo(),
+                    moveNo: yield moveNo(tx),
                     lotId: lot.id,
                     warehouseId: lot.warehouseId,
                     qtyKg: new client_1.Prisma.Decimal(delta),
                     reason: 'ADJUSTMENT',
                     refType: 'ADJ',
-                    refId: adjustmentRef(),
+                    refId: yield adjustmentRef(tx),
                     memo: input.reason,
                     lotLabel: lot.label
                 }
             });
+            const absQty = Math.abs(delta);
+            const adjustmentValue = absQty * Number(lot.avgCostPerKg || 0);
+            let voucher = null;
+            if (adjustmentValue > 0) {
+                const inventoryAccount = yield ensureSystemAccountByCode(tx, 'AC-INVENTORY', 'Inventory', 'asset');
+                const adjustmentAccount = yield ensureSystemAccountByCode(tx, 'AC-INVENTORY-ADJ', 'Inventory Adjustment', 'expense');
+                const rows = input.mode === 'add'
+                    ? [
+                        { accountId: inventoryAccount.id, dr: adjustmentValue, cr: 0, memo: input.reason || 'Stock adjustment increase' },
+                        { accountId: adjustmentAccount.id, dr: 0, cr: adjustmentValue, memo: input.reason || 'Stock adjustment offset' },
+                    ]
+                    : [
+                        { accountId: adjustmentAccount.id, dr: adjustmentValue, cr: 0, memo: input.reason || 'Stock adjustment expense' },
+                        { accountId: inventoryAccount.id, dr: 0, cr: adjustmentValue, memo: input.reason || 'Stock adjustment decrease' },
+                    ];
+                const voucherDate = new Date();
+                voucher = yield createInventoryVoucher(tx, {
+                    vdate: voucherDate,
+                    narration: `Inventory adjustment ${input.mode} - ${lot.label}`,
+                    rows,
+                });
+            }
             return {
                 lot: updatedLot,
-                move
+                move,
+                voucher
             };
         }));
     });
@@ -98,10 +173,11 @@ function transferStock(input) {
                 orderBy: { createdAt: 'desc' }
             });
             if (!destinationLot) {
+                const nextLotNo = yield transferLotNo(tx);
                 destinationLot = yield tx.lot.create({
                     data: {
-                        lotNo: transferLotNo(),
-                        label: transferLotLabel(sourceLot.productId, input.toWarehouseId),
+                        lotNo: nextLotNo,
+                        label: transferLotLabel(nextLotNo, sourceLot.productId, input.toWarehouseId),
                         productId: sourceLot.productId,
                         warehouseId: input.toWarehouseId,
                         availableKg: new client_1.Prisma.Decimal(0),
@@ -125,10 +201,10 @@ function transferStock(input) {
                     avgCostPerKg: new client_1.Prisma.Decimal(dstNextAvg)
                 }
             });
-            const refId = transferRef();
+            const refId = yield transferRef(tx);
             const outMove = yield tx.stockMove.create({
                 data: {
-                    moveNo: moveNo(),
+                    moveNo: yield moveNo(tx),
                     lotId: sourceLot.id,
                     warehouseId: sourceLot.warehouseId,
                     qtyKg: new client_1.Prisma.Decimal(-input.qtyKg),
@@ -141,7 +217,7 @@ function transferStock(input) {
             });
             const inMove = yield tx.stockMove.create({
                 data: {
-                    moveNo: moveNo(),
+                    moveNo: yield moveNo(tx),
                     lotId: updatedDestinationLot.id,
                     warehouseId: input.toWarehouseId,
                     qtyKg: new client_1.Prisma.Decimal(input.qtyKg),
@@ -152,10 +228,36 @@ function transferStock(input) {
                     lotLabel: updatedDestinationLot.label
                 }
             });
+            const transferValue = input.qtyKg * Number(sourceLot.avgCostPerKg || 0);
+            let voucher = null;
+            if (transferValue > 0) {
+                const inventoryAccount = yield ensureSystemAccountByCode(tx, 'AC-INVENTORY', 'Inventory', 'asset');
+                const transferClearingAccount = yield ensureSystemAccountByCode(tx, 'AC-INVENTORY-TRF', 'Inventory Transfer Clearing', 'asset');
+                const voucherDate = new Date();
+                voucher = yield createInventoryVoucher(tx, {
+                    vdate: voucherDate,
+                    narration: `Inventory transfer ${sourceLot.label} -> ${updatedDestinationLot.label}`,
+                    rows: [
+                        {
+                            accountId: inventoryAccount.id,
+                            dr: transferValue,
+                            cr: 0,
+                            memo: input.memo || `Transfer in to ${toWarehouse.name}`,
+                        },
+                        {
+                            accountId: transferClearingAccount.id,
+                            dr: 0,
+                            cr: transferValue,
+                            memo: input.memo || `Transfer out from source warehouse`,
+                        },
+                    ],
+                });
+            }
             return {
                 sourceLot: updatedSourceLot,
                 destinationLot: updatedDestinationLot,
-                moves: [outMove, inMove]
+                moves: [outMove, inMove],
+                voucher
             };
         }));
     });

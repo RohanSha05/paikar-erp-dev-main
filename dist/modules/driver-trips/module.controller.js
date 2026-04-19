@@ -45,6 +45,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
+exports.settle = settle;
 const service = __importStar(require("./module.service"));
 function list(_req, res) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -69,6 +70,22 @@ function update(req, res) {
             success: true,
             message: 'Driver trip updated',
             data: trip
+        });
+    });
+}
+function settle(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { payAccountId, payNowAmount, memo, settledAt } = req.body || {};
+        const trip = yield service.settleDriverTrip(req.params.id, {
+            payAccountId,
+            payNowAmount,
+            memo,
+            settledAt,
+        });
+        return res.json({
+            success: true,
+            message: 'Driver trip settled',
+            data: trip,
         });
     });
 }

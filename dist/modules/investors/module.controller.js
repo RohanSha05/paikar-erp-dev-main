@@ -172,6 +172,7 @@ function postTxn(req, res, next) {
                 amount,
                 instrument,
                 memo,
+                payAccountId,
             });
             res.status(201).json({
                 success: true,

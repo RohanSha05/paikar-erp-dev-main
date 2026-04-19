@@ -1,12 +1,14 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import type {
 	AccountDto,
 	CreateAccountInput,
 	LedgerReportDto,
 	TrialBalanceDto,
 	ExpenseMonthSummaryDto,
+	ReportMetaDto,
 } from './module.types';
 
 function toNumber(value: Prisma.Decimal | number | null | undefined) {
@@ -26,10 +28,17 @@ function slugify(value: string) {
 		.slice(0, 20);
 }
 
-function generateAccountCode(name: string, type: string) {
-	const prefix = slugify(type || 'AC');
-	const suffix = slugify(name || 'ACCOUNT');
-	return `${prefix}-${suffix}-${Date.now().toString().slice(-5)}`;
+function accountTypeTag(type: string) {
+	const tag = slugify(type || 'GEN').slice(0, 6);
+	return tag || 'GEN';
+}
+
+async function generateAccountCode(type: string) {
+	return nextDailySequenceIdForDelegate(
+		prisma.account,
+		'code',
+		`AC-${accountTypeTag(type)}`,
+	);
 }
 
 function mapAccount(account: any): AccountDto {
@@ -40,6 +49,26 @@ function mapAccount(account: any): AccountDto {
 		type: account.type,
 		active: account.active,
 		opening: toNumber(account.opening),
+	};
+}
+
+export async function getReportMeta(): Promise<ReportMetaDto> {
+	const latestVoucher = await prisma.voucher.findFirst({
+		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
+		select: { vdate: true },
+	});
+
+	if (!latestVoucher) {
+		return {
+			latestVoucherDate: null,
+			latestVoucherYear: null,
+		};
+	}
+
+	const latestDate = latestVoucher.vdate.toISOString().slice(0, 10);
+	return {
+		latestVoucherDate: latestDate,
+		latestVoucherYear: latestVoucher.vdate.getUTCFullYear(),
 	};
 }
 
@@ -70,8 +99,8 @@ async function fetchVouchers(startDate?: string, endDate?: string) {
 			},
 		},
 		orderBy: [
-			{ vdate: 'asc' },
-			{ createdAt: 'asc' },
+			{ vdate: 'desc' },
+			{ createdAt: 'desc' },
 		],
 	});
 }
@@ -89,7 +118,7 @@ export async function listAccounts(filterByType?: string): Promise<AccountDto[]>
 }
 
 export async function createAccount(input: CreateAccountInput): Promise<AccountDto> {
-	const code = (input.code || generateAccountCode(input.name, input.type)).trim();
+	const code = (input.code || (await generateAccountCode(input.type))).trim().toUpperCase();
 	const exists = await prisma.account.findUnique({ where: { code } });
 	if (exists) {
 		throw new HttpError(409, 'Account code already exists');
@@ -209,7 +238,7 @@ export async function getLedger(accountId: string, from?: string, to?: string): 
 		account: mapAccount(account),
 		opening,
 		closing: balance,
-		rows,
+		rows: rows.reverse(),
 	};
 }
 
@@ -221,7 +250,7 @@ export async function getTrialBalance(): Promise<TrialBalanceDto> {
 
 	const vouchers = await prisma.voucher.findMany({
 		include: { rows: true },
-		orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
+		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
 	});
 
 	const rows = accounts.map((account) => {
@@ -258,6 +287,11 @@ export async function getTrialBalance(): Promise<TrialBalanceDto> {
 }
 
 export async function getExpenseSummary(year: number): Promise<ExpenseMonthSummaryDto[]> {
+	if (!Number.isFinite(year)) {
+		const meta = await getReportMeta();
+		year = meta.latestVoucherYear ?? new Date().getUTCFullYear();
+	}
+
 	const start = new Date(`${year}-01-01T00:00:00Z`);
 	const end = new Date(`${year}-12-31T23:59:59Z`);
 	const vouchers = await prisma.voucher.findMany({
@@ -269,7 +303,7 @@ export async function getExpenseSummary(year: number): Promise<ExpenseMonthSumma
 				include: { account: true },
 			},
 		},
-		orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
+		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
 	});
 
 	const months = Array.from({ length: 12 }, (_, index) => ({

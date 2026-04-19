@@ -15,6 +15,7 @@ exports.updateParty = updateParty;
 exports.deleteParty = deleteParty;
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
 function listParties() {
     return __awaiter(this, void 0, void 0, function* () {
         return prisma_1.prisma.seller.findMany({
@@ -24,19 +25,33 @@ function listParties() {
 }
 function createParty(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        return prisma_1.prisma.seller.create({ data: input });
+        const seller = yield prisma_1.prisma.seller.create({ data: input });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'seller',
+            refId: seller.id,
+            name: seller.name,
+            type: 'party',
+        });
+        return seller;
     });
 }
 function updateParty(id, input) {
     return __awaiter(this, void 0, void 0, function* () {
-        const seller = yield prisma_1.prisma.seller.findUnique({ where: { id } });
-        if (!seller) {
+        const existingSeller = yield prisma_1.prisma.seller.findUnique({ where: { id } });
+        if (!existingSeller) {
             throw new httpError_1.HttpError(404, 'Party not found');
         }
-        return prisma_1.prisma.seller.update({
+        const updatedSeller = yield prisma_1.prisma.seller.update({
             where: { id },
             data: input
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'seller',
+            refId: updatedSeller.id,
+            name: updatedSeller.name,
+            type: 'party',
+        });
+        return updatedSeller;
     });
 }
 function deleteParty(id) {

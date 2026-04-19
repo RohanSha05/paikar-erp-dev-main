@@ -9,6 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getReportMeta = getReportMeta;
 exports.listAccounts = listAccounts;
 exports.createAccount = createAccount;
 exports.getDaybook = getDaybook;
@@ -18,6 +19,7 @@ exports.getExpenseSummary = getExpenseSummary;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function toNumber(value) {
     return value ? Number(value) : 0;
 }
@@ -32,10 +34,14 @@ function slugify(value) {
         .replace(/^-+|-+$/g, '')
         .slice(0, 20);
 }
-function generateAccountCode(name, type) {
-    const prefix = slugify(type || 'AC');
-    const suffix = slugify(name || 'ACCOUNT');
-    return `${prefix}-${suffix}-${Date.now().toString().slice(-5)}`;
+function accountTypeTag(type) {
+    const tag = slugify(type || 'GEN').slice(0, 6);
+    return tag || 'GEN';
+}
+function generateAccountCode(type) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.account, 'code', `AC-${accountTypeTag(type)}`);
+    });
 }
 function mapAccount(account) {
     return {
@@ -46,6 +52,25 @@ function mapAccount(account) {
         active: account.active,
         opening: toNumber(account.opening),
     };
+}
+function getReportMeta() {
+    return __awaiter(this, void 0, void 0, function* () {
+        const latestVoucher = yield prisma_1.prisma.voucher.findFirst({
+            orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
+            select: { vdate: true },
+        });
+        if (!latestVoucher) {
+            return {
+                latestVoucherDate: null,
+                latestVoucherYear: null,
+            };
+        }
+        const latestDate = latestVoucher.vdate.toISOString().slice(0, 10);
+        return {
+            latestVoucherDate: latestDate,
+            latestVoucherYear: latestVoucher.vdate.getUTCFullYear(),
+        };
+    });
 }
 function fetchVouchers(startDate, endDate) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -66,8 +91,8 @@ function fetchVouchers(startDate, endDate) {
                 },
             },
             orderBy: [
-                { vdate: 'asc' },
-                { createdAt: 'asc' },
+                { vdate: 'desc' },
+                { createdAt: 'desc' },
             ],
         });
     });
@@ -84,7 +109,7 @@ function listAccounts(filterByType) {
 function createAccount(input) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c;
-        const code = (input.code || generateAccountCode(input.name, input.type)).trim();
+        const code = (input.code || (yield generateAccountCode(input.type))).trim().toUpperCase();
         const exists = yield prisma_1.prisma.account.findUnique({ where: { code } });
         if (exists) {
             throw new httpError_1.HttpError(409, 'Account code already exists');
@@ -190,7 +215,7 @@ function getLedger(accountId, from, to) {
             account: mapAccount(account),
             opening,
             closing: balance,
-            rows,
+            rows: rows.reverse(),
         };
     });
 }
@@ -202,7 +227,7 @@ function getTrialBalance() {
         });
         const vouchers = yield prisma_1.prisma.voucher.findMany({
             include: { rows: true },
-            orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
+            orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
         });
         const rows = accounts.map((account) => {
             let dr = 0;
@@ -237,6 +262,11 @@ function getTrialBalance() {
 }
 function getExpenseSummary(year) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        if (!Number.isFinite(year)) {
+            const meta = yield getReportMeta();
+            year = (_a = meta.latestVoucherYear) !== null && _a !== void 0 ? _a : new Date().getUTCFullYear();
+        }
         const start = new Date(`${year}-01-01T00:00:00Z`);
         const end = new Date(`${year}-12-31T23:59:59Z`);
         const vouchers = yield prisma_1.prisma.voucher.findMany({
@@ -248,7 +278,7 @@ function getExpenseSummary(year) {
                     include: { account: true },
                 },
             },
-            orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
+            orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
         });
         const months = Array.from({ length: 12 }, (_, index) => ({
             month: index + 1,

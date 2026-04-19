@@ -14,11 +14,15 @@ exports.createDriver = createDriver;
 exports.updateDriver = updateDriver;
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
+const party_account_1 = require("../accounting/party-account");
+const sequence_id_1 = require("../../common/utils/sequence-id");
 function normalize(value) {
     return (value === null || value === void 0 ? void 0 : value.trim()) || undefined;
 }
 function generateDriverId() {
-    return `DRV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    return __awaiter(this, void 0, void 0, function* () {
+        return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.driver, 'id', 'DRV');
+    });
 }
 function listDrivers() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -29,12 +33,12 @@ function listDrivers() {
 }
 function createDriver(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        const id = normalize(input.id) || generateDriverId();
+        const id = normalize(input.id) || (yield generateDriverId());
         const exists = yield prisma_1.prisma.driver.findUnique({ where: { id } });
         if (exists) {
             throw new httpError_1.HttpError(409, 'Driver ID already exists');
         }
-        return prisma_1.prisma.driver.create({
+        const driver = yield prisma_1.prisma.driver.create({
             data: {
                 id,
                 name: input.name.trim(),
@@ -44,6 +48,13 @@ function createDriver(input) {
                 active: input.active !== false
             }
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'driver',
+            refId: driver.id,
+            name: driver.name,
+            type: 'party',
+        });
+        return driver;
     });
 }
 function updateDriver(id, input) {
@@ -53,7 +64,7 @@ function updateDriver(id, input) {
         if (!existing) {
             throw new httpError_1.HttpError(404, 'Driver not found');
         }
-        return prisma_1.prisma.driver.update({
+        const driver = yield prisma_1.prisma.driver.update({
             where: { id },
             data: {
                 name: (_a = input.name) === null || _a === void 0 ? void 0 : _a.trim(),
@@ -63,5 +74,12 @@ function updateDriver(id, input) {
                 active: input.active
             }
         });
+        yield (0, party_account_1.ensurePartyAccount)({
+            kind: 'driver',
+            refId: driver.id,
+            name: driver.name,
+            type: 'party',
+        });
+        return driver;
     });
 }

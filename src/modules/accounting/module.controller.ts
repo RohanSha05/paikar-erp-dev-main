@@ -17,10 +17,18 @@ export async function createAccount(req: Request, res: Response) {
 
 export async function getDaybook(req: Request, res: Response) {
 	const date = typeof req.query.date === 'string' ? req.query.date : undefined;
-	if (!date) {
-		return res.status(400).json({ success: false, message: 'date query is required' });
+	const meta = await service.getReportMeta();
+	const effectiveDate = date || meta.latestVoucherDate;
+	if (!effectiveDate) {
+		return res.json({
+			success: true,
+			data: {
+				list: [],
+				totals: { debit: 0, credit: 0 },
+			},
+		});
 	}
-	const data = await service.getDaybook(date);
+	const data = await service.getDaybook(effectiveDate);
 	return res.json({ success: true, data });
 }
 
@@ -41,8 +49,13 @@ export async function getTrialBalance(_req: Request, res: Response) {
 }
 
 export async function getExpenseSummary(req: Request, res: Response) {
-	const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : new Date().getFullYear();
-	const year = Number.isFinite(yearValue) ? yearValue : new Date().getFullYear();
+	const yearValue = typeof req.query.year === 'string' ? Number(req.query.year) : NaN;
+	const year = Number.isFinite(yearValue) ? yearValue : NaN;
 	const data = await service.getExpenseSummary(year);
+	return res.json({ success: true, data });
+}
+
+export async function getReportMeta(_req: Request, res: Response) {
+	const data = await service.getReportMeta();
 	return res.json({ success: true, data });
 }

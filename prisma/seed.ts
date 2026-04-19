@@ -60,6 +60,12 @@ async function main() {
     create: { code: 'AC-ROUND', name: 'Rounding Difference', type: 'income' }
   });
 
+  await prisma.account.upsert({
+    where: { code: 'AC-INC' },
+    update: {},
+    create: { code: 'AC-INC', name: 'Income', type: 'income' }
+  });
+
   await prisma.warehouse.upsert({
     where: { code: 'WH-1' },
     update: {},
