@@ -111,6 +111,23 @@ function computeSoldState(order, initialStockKg, remainingStockKg) {
         return 'partial';
     return 'none';
 }
+function resolveVoucherAccountRef(tx, key) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const account = yield tx.account.findFirst({
+            where: {
+                OR: [
+                    { code: key },
+                    { id: key },
+                ],
+            },
+            select: { id: true },
+        });
+        if (!account) {
+            throw new httpError_1.HttpError(400, `Account not found: ${key}`);
+        }
+        return account;
+    });
+}
 function postPurchaseAdvance(tx, po) {
     return __awaiter(this, void 0, void 0, function* () {
         const advancePaid = numberValue(po.advancePaid);
@@ -123,7 +140,9 @@ function postPurchaseAdvance(tx, po) {
             name: po.seller.name,
             type: 'party',
         });
-        const instrumentAccountId = po.advanceInstrumentId || 'AC-CASH';
+        const sellerAccountRef = yield resolveVoucherAccountRef(tx, sellerAccount.code);
+        const instrumentKey = String(po.advanceInstrumentId || 'AC-CASH').trim();
+        const instrumentAccountRef = yield resolveVoucherAccountRef(tx, instrumentKey);
         const voucher = yield tx.voucher.create({
             data: {
                 voucherNo: yield voucherNo(tx),
@@ -137,14 +156,14 @@ function postPurchaseAdvance(tx, po) {
             data: [
                 {
                     voucherId: voucher.id,
-                    accountId: sellerAccount.id,
+                    accountId: sellerAccountRef.id,
                     dr: new client_1.Prisma.Decimal(advancePaid),
                     cr: new client_1.Prisma.Decimal(0),
                     memo: `Advance on PO ${po.poNo}`,
                 },
                 {
                     voucherId: voucher.id,
-                    accountId: instrumentAccountId,
+                    accountId: instrumentAccountRef.id,
                     dr: new client_1.Prisma.Decimal(0),
                     cr: new client_1.Prisma.Decimal(advancePaid),
                     memo: `Advance on PO ${po.poNo}`,
@@ -449,6 +468,8 @@ function approvePurchaseOrder(id) {
                 name: po.seller.name,
                 type: 'party',
             });
+            const inventoryAccountRef = yield resolveVoucherAccountRef(tx, inventoryAccount.code);
+            const sellerAccountRef = yield resolveVoucherAccountRef(tx, sellerAccount.code);
             const voucher = yield tx.voucher.create({
                 data: {
                     voucherNo: yield voucherNo(tx),
@@ -462,14 +483,14 @@ function approvePurchaseOrder(id) {
                 data: [
                     {
                         voucherId: voucher.id,
-                        accountId: inventoryAccount.id,
+                        accountId: inventoryAccountRef.id,
                         dr: new client_1.Prisma.Decimal(totalCost),
                         cr: new client_1.Prisma.Decimal(0),
                         memo: `PO ${po.poNo} inventory`
                     },
                     {
                         voucherId: voucher.id,
-                        accountId: sellerAccount.id,
+                        accountId: sellerAccountRef.id,
                         dr: new client_1.Prisma.Decimal(0),
                         cr: new client_1.Prisma.Decimal(totalCost),
                         memo: `PO ${po.poNo} payable`
