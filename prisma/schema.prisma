@@ -15,7 +15,7 @@ model RetailPurchaseDraft {
   sellerName    String?  // Required if isDue is true
   sellerAddress String?  // Required if isDue is true
   sellerPhone   String?  // Required if isDue is true
-
+  bagCostPerBag  Decimal  @default(0)
   productId     String?
   productName   String?
   productCategory String?

@@ -94,7 +94,7 @@ export class RetailPurchaseDraftService {
       seller = await createParty({ name: 'খুচরা বিক্রেতা' });
     }
     const sellerId = seller.id;
-    // Optionally, update all drafts to use this sellerId
+    // Optionally, update all drafts to usse this sellerId
     await prisma.retailPurchaseDraft.updateMany({
       where: { 
         date: new Date(date),
@@ -119,6 +119,7 @@ export class RetailPurchaseDraftService {
           transport: 0, // Set transport cost to 0 by default
           loading: 0,   // Set loading cost to 0 by default
           misc: 0,      // Set misc cost to 0 by default
+          bagCostPerBag: 0, 
           items: {
             create: drafts.map((d) => {
               const bagCount = d.mon ? Math.round(Number(d.mon) / 40) : 0;
@@ -131,6 +132,7 @@ export class RetailPurchaseDraftService {
                 weightPolicy: 'retail',
                 rateBasis: 'perMon',
                 rateValue: d.price,
+                bagCostPerBag: 0,
               };
             }),
           },
