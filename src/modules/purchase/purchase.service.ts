@@ -397,6 +397,7 @@ export async function updatePurchaseOrderDraft(
 
 export async function approvePurchaseOrder(id: string) {
   return prisma.$transaction(async (tx) => {
+
     const po = await tx.purchaseOrder.findUnique({
       where: { id },
       include: {
@@ -409,6 +410,15 @@ export async function approvePurchaseOrder(id: string) {
     if (!po) throw new HttpError(404, 'Purchase order not found');
     if (po.status !== 'DRAFT') throw new HttpError(400, 'Only draft PO can be approved');
     if (!po.items.length) throw new HttpError(400, 'PO has no items');
+
+
+
+    const transportMode = String(po.transportMode || '').toLowerCase();
+    const isOwnTruck = transportMode === 'owntruck';
+
+    if (isOwnTruck && !po.driverId) {
+      throw new HttpError(400, 'Driver is required for OWN_TRUCK');
+    }
 
     let totalBags = 0;
     let basePurchase = 0;
@@ -448,6 +458,8 @@ export async function approvePurchaseOrder(id: string) {
 
       const nextLotNo = await lotNo(tx);
 
+      
+
       const lot = await tx.lot.create({
         data: {
           lotNo: nextLotNo,
@@ -475,8 +487,20 @@ export async function approvePurchaseOrder(id: string) {
     }
 
     const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
-    const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
+
+    const transportCost = Number(po.transport);
+
+
+    const extraCosts =
+       transportCost +
+       headerLoading +
+      Number(po.misc) +
+      totalBags * bagCostPerBag;
+
+    // const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
+    // const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
     const totalCost = basePurchase + extraCosts;
+
 
     const inventoryAccount = await tx.account.upsert({
       where: { code: 'AC-INVENTORY' },
@@ -486,11 +510,25 @@ export async function approvePurchaseOrder(id: string) {
     const sellerAccount = await ensurePartyAccount({
       kind: 'seller',
       refId: po.seller.id,
-      name: po.seller.name,
+      name: po.seller.name, 
       type: 'party',
     });
     const inventoryAccountRef = await resolveVoucherAccountRef(tx, inventoryAccount.code);
     const sellerAccountRef = await resolveVoucherAccountRef(tx, sellerAccount.code);
+
+    let driverAccountRef: any = null;
+
+
+    if (isOwnTruck) {
+      const driverAccount = await ensurePartyAccount({
+        kind: 'driver',
+        refId: po.driverId!,
+        name: po.driverName || 'Driver',
+        type: 'party',
+      });
+
+      driverAccountRef = await resolveVoucherAccountRef(tx, driverAccount.code);
+    }
 
     const voucher = await tx.voucher.create({
       data: {
@@ -501,26 +539,71 @@ export async function approvePurchaseOrder(id: string) {
         purchaseOrderId: po.id
       }
     });
+    
 
-    await tx.voucherRow.createMany({
-      data: [
-        {
-          voucherId: voucher.id,
-          accountId: inventoryAccountRef.id,
-          dr: new Prisma.Decimal(totalCost),
-          cr: new Prisma.Decimal(0),
-          memo: `PO ${po.poNo} inventory`
-        },
-        {
-          voucherId: voucher.id,
-          accountId: sellerAccountRef.id,
-          dr: new Prisma.Decimal(0),
-          cr: new Prisma.Decimal(totalCost),
-          memo: `PO ${po.poNo} payable`
-        }
-      ]
+   const rows: any[] = [];
+
+    // 1. Inventory (FULL COST)
+    rows.push({
+      voucherId: voucher.id,
+      accountId: inventoryAccountRef.id,
+      dr: new Prisma.Decimal(totalCost),
+      cr: new Prisma.Decimal(0),
+      memo: `PO ${po.poNo} inventory`,
     });
 
+    // 2. Seller (ONLY GOODS)
+    rows.push({
+      voucherId: voucher.id,
+      accountId: sellerAccountRef.id,
+      dr: new Prisma.Decimal(0),
+      cr: new Prisma.Decimal(basePurchase),
+      memo: `PO ${po.poNo} goods payable`,
+    });
+
+    // 3. Driver (ONLY TRANSPORT)
+    if (isOwnTruck && driverAccountRef && transportCost > 0) {
+    rows.push({
+      voucherId: voucher.id,
+      accountId: driverAccountRef.id,
+      dr: new Prisma.Decimal(0),
+      cr: new Prisma.Decimal(transportCost),
+      memo: `PO ${po.poNo} transport`,
+    });
+  }
+
+    // 4. OTHER COST (loading + misc + bag)
+    const otherCost =
+      headerLoading +
+      Number(po.misc) +
+      totalBags * bagCostPerBag;
+
+    if (otherCost > 0) {
+      const expenseAccount = await tx.account.upsert({
+        where: { code: 'AC-PURCHASE-EXP' },
+        update: {},
+        create: {
+          code: 'AC-PURCHASE-EXP',
+          name: 'Purchase Expenses',
+          type: 'expense',
+        },
+      });
+
+      const expenseRef = await resolveVoucherAccountRef(tx, expenseAccount.code);
+
+      rows.push({
+        voucherId: voucher.id,
+        accountId: expenseRef.id,
+        dr: new Prisma.Decimal(0),
+        cr: new Prisma.Decimal(otherCost),
+        memo: `PO ${po.poNo} extra cost`,
+      });
+    }
+
+    // FINAL INSERT
+    await tx.voucherRow.createMany({
+      data: rows,
+    });
     await postPurchaseAdvance(tx, po);
 
     const updated = await tx.purchaseOrder.update({

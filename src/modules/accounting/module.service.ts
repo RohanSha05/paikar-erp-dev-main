@@ -317,8 +317,15 @@ export async function getExpenseSummary(year: number): Promise<ExpenseMonthSumma
 		const monthIndex = voucher.vdate.getMonth();
 		const expenseAmount = voucher.rows.reduce((sum, row) => {
 			const type = normalizeType(row.account?.type || '');
-			if (type !== 'expense' && type !== 'transport') {
-				return sum;
+
+			const isDriverAccount = row.account?.partyKind === 'driver';
+
+			if (
+			type !== 'expense' &&
+			type !== 'transport' &&
+			!isDriverAccount
+			) {
+			return sum;
 			}
 			return sum + toNumber(row.dr);
 		}, 0);
