@@ -25,10 +25,47 @@ async function voucherNo(tx: Prisma.TransactionClient, date: Date = new Date()) 
 
 async function poNo() {
   return nextDailySequenceIdForDelegate(prisma.purchaseOrder, 'poNo', 'PO');
-}
+} 
 
-function lotLabel(lotNoValue: string, productId: string, warehouseId: string) {
-  return `${lotNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}`;
+function buildLotLabel(params: {
+  lotNo: string;
+  sellerName: string;
+  date: Date;
+  category: string;
+  productName: string;
+  weightKg: number;
+}) {
+  const clean = (v: string) =>
+    v
+      .trim()
+      .replace(/\s+/g, '') // remove spaces
+      .replace(/[^\p{L}\p{N}]/gu, ''); // keep ALL unicode letters + numbers
+
+  const formatLotSeq = (lotNo: string) => {
+    // extract last numeric part safely → LOT-005 → 005
+    const match = lotNo.match(/(\d+)$/);
+    return match ? match[1].padStart(3, '0') : lotNo;
+  };
+
+const datePart =
+  `${String(params.date.getDate()).padStart(2, '0')}` +
+  `${String(params.date.getMonth() + 1).padStart(2, '0')}` +
+  `${params.date.getFullYear()}`;
+  const KG_PER_MON = 40;
+  const mon = params.weightKg / KG_PER_MON;
+
+  const monFormatted =
+    mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
+
+  return [
+    `LOT-${formatLotSeq(params.lotNo)}`,
+    clean(params.sellerName).toUpperCase(),
+    datePart,
+    clean(params.category),
+    clean(params.productName),
+    monFormatted,
+    `${params.weightKg}KG`,
+  ].join('-');
 }
 
 function resolveItemDisplayName(item: { productType?: string | null; productName?: string | null }, productName: string) {
@@ -39,6 +76,8 @@ function numberValue(value: unknown) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
 }
+
+
 
 function computePurchaseTotals(order: any) {
   const items = Array.isArray(order?.items) ? order.items : [];
@@ -456,21 +495,42 @@ export async function approvePurchaseOrder(id: string) {
       const lineCost = lineBase + item.bagCount * bagCostPerBag;
       const avgCostPerKg = stockKg > 0 ? lineCost / stockKg : 0;
 
-      const nextLotNo = await lotNo(tx);
+      const product = await tx.product.findUnique({
+        where: { id: item.productId },
+        select: {
+          name: true,
+          category: true,
+          unit: true,
+        },
+      });
 
-      
+     const nextLotNo = await lotNo(tx);
+     const sellerName = po.seller.name;
+
+     const KG_PER_MON = 40;
+     const monValue = stockKg / KG_PER_MON;
+
+     console.log('PRODUCT DEBUG:', product);
 
       const lot = await tx.lot.create({
         data: {
           lotNo: nextLotNo,
-          label: lotLabel(nextLotNo, item.productId, po.warehouseId),
+          label: buildLotLabel({
+          lotNo: nextLotNo,
+          sellerName,
+          date: new Date(po.createdAt || new Date()),
+          category: product?.category || 'GEN',
+          productName: product?.name || 'UNKNOWN',
+          weightKg: stockKg,
+        }),
           productId: item.productId,
           warehouseId: po.warehouseId,
           availableKg: new Prisma.Decimal(stockKg),
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
-          sourcePoItemId: item.id
-        }
+          sourcePoItemId: item.id,
+          meta: { kgPerBag: Number(item.actualKgPerBag) }
+        },
       });
 
       await tx.stockMove.create({

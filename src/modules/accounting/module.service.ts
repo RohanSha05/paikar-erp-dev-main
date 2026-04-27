@@ -48,6 +48,8 @@ function mapAccount(account: any): AccountDto {
 		name: account.name,
 		type: account.type,
 		active: account.active,
+		partyKind: account.partyKind,
+		partyRefId : account.partyRefId,
 		opening: toNumber(account.opening),
 	};
 }
@@ -230,6 +232,7 @@ export async function getLedger(accountId: string, from?: string, to?: string): 
 				dr: toNumber(row.dr),
 				cr: toNumber(row.cr),
 				balance,
+				createdAt: row.createdAt.toISOString(), 
 			};
 		}),
 	);

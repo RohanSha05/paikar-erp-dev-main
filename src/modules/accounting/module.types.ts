@@ -2,7 +2,9 @@ export interface AccountDto {
 	id: string;
 	code: string;
 	name: string;
-	type: string;
+	type: string; 
+	partyKind : string;
+  	partyRefId : string;
 	active: boolean;
 	opening?: number;
 }
@@ -25,6 +27,7 @@ export interface LedgerRowDto {
 	dr: number;
 	cr: number;
 	balance: number;
+	createdAt: string;
 }
 
 export interface LedgerReportDto {

@@ -43,9 +43,12 @@ function poNo() {
         return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.purchaseOrder, 'poNo', 'PO');
     });
 }
-function lotLabel(lotNoValue, productId, warehouseId) {
-    return `${lotNoValue}-${productId.slice(0, 8)}-${warehouseId.slice(0, 8)}`;
-}
+const KG_PER_MON = 40;
+
+const mon = availableKg / KG_PER_MON;
+const monFormatted = mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
+
+const lotId = `LOT-${date}-${seq}-${supplier}-${product}-${monFormatted}-${availableKg}KG`;
 function resolveItemDisplayName(item, productName) {
     var _a, _b;
     return ((_a = item.productType) === null || _a === void 0 ? void 0 : _a.trim()) || ((_b = item.productName) === null || _b === void 0 ? void 0 : _b.trim()) || productName;
