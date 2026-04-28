@@ -43,12 +43,34 @@ function poNo() {
         return (0, sequence_id_1.nextDailySequenceIdForDelegate)(prisma_1.prisma.purchaseOrder, 'poNo', 'PO');
     });
 }
-const KG_PER_MON = 40;
-
-const mon = availableKg / KG_PER_MON;
-const monFormatted = mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
-
-const lotId = `LOT-${date}-${seq}-${supplier}-${product}-${monFormatted}-${availableKg}KG`;
+function buildLotLabel(params) {
+	const clean = (v) =>
+		v
+			.trim()
+			.replace(/\s+/g, "") // remove spaces
+			.replace(/[^\p{L}\p{N}]/gu, ""); // keep ALL unicode letters + numbers
+	const formatLotSeq = (lotNo) => {
+		// extract last numeric part safely → LOT-005 → 005
+		const match = lotNo.match(/(\d+)$/);
+		return match ? match[1].padStart(3, "0") : lotNo;
+	};
+	const datePart =
+		`${String(params.date.getDate()).padStart(2, "0")}` +
+		`${String(params.date.getMonth() + 1).padStart(2, "0")}` +
+		`${params.date.getFullYear()}`;
+	const KG_PER_MON = 40;
+	const mon = params.weightKg / KG_PER_MON;
+	const monFormatted = mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
+	return [
+		`LOT-${formatLotSeq(params.lotNo)}`,
+		clean(params.sellerName).toUpperCase(),
+		datePart,
+		clean(params.category),
+		clean(params.productName),
+		monFormatted,
+		`${params.weightKg}KG`,
+	].join("-");
+}
 function resolveItemDisplayName(item, productName) {
     var _a, _b;
     return ((_a = item.productType) === null || _a === void 0 ? void 0 : _a.trim()) || ((_b = item.productName) === null || _b === void 0 ? void 0 : _b.trim()) || productName;
@@ -404,6 +426,14 @@ function approvePurchaseOrder(id) {
                 throw new httpError_1.HttpError(400, 'Only draft PO can be approved');
             if (!po.items.length)
                 throw new httpError_1.HttpError(400, 'PO has no items');
+            const transportMode = String(po.transportMode || "").toLowerCase();
+						const isOwnTruck = transportMode === "owntruck";
+						if (isOwnTruck && !po.driverId) {
+							throw new httpError_1.HttpError(
+								400,
+								"Driver is required for OWN_TRUCK",
+							);
+						}
             let totalBags = 0;
             let basePurchase = 0;
             let totalStockKg = 0;
@@ -432,18 +462,37 @@ function approvePurchaseOrder(id) {
                 basePurchase += lineBase;
                 const lineCost = lineBase + item.bagCount * bagCostPerBag;
                 const avgCostPerKg = stockKg > 0 ? lineCost / stockKg : 0;
+                const product = yield tx.product.findUnique({
+                    where: { id: item.productId },
+                    select: {
+                        name: true,
+                        category: true,
+                        unit: true,
+                    },
+                });
                 const nextLotNo = yield lotNo(tx);
+                const sellerName = po.seller.name;
+								const KG_PER_MON = 40;
+								const monValue = stockKg / KG_PER_MON;
                 const lot = yield tx.lot.create({
                     data: {
                         lotNo: nextLotNo,
-                        label: lotLabel(nextLotNo, item.productId, po.warehouseId),
+                        label: buildLotLabel({
+                            lotNo: nextLotNo,
+                            sellerName,
+                            date: new Date(po.createdAt || new Date()),
+                            category: (product === null || product === void 0 ? void 0 : product.category) || 'GEN',
+                            productName: (product === null || product === void 0 ? void 0 : product.name) || 'UNKNOWN',
+                            weightKg: stockKg,
+                        }),
                         productId: item.productId,
                         warehouseId: po.warehouseId,
                         availableKg: new client_1.Prisma.Decimal(stockKg),
                         avgCostPerKg: new client_1.Prisma.Decimal(avgCostPerKg),
                         sourcePoId: po.id,
-                        sourcePoItemId: item.id
-                    }
+                        sourcePoItemId: item.id,
+                        meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+                    },
                 });
                 yield tx.stockMove.create({
                     data: {
@@ -458,7 +507,13 @@ function approvePurchaseOrder(id) {
                 });
             }
             const headerLoading = Number((_a = poExtended.loadingUnloading) !== null && _a !== void 0 ? _a : po.loading);
-            const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
+            const transportCost = Number(po.transport);
+            const extraCosts = transportCost +
+                headerLoading +
+                Number(po.misc) +
+                totalBags * bagCostPerBag;
+            // const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
+            // const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
             const totalCost = basePurchase + extraCosts;
             const inventoryAccount = yield tx.account.upsert({
                 where: { code: 'AC-INVENTORY' },
@@ -473,6 +528,16 @@ function approvePurchaseOrder(id) {
             });
             const inventoryAccountRef = yield resolveVoucherAccountRef(tx, inventoryAccount.code);
             const sellerAccountRef = yield resolveVoucherAccountRef(tx, sellerAccount.code);
+            let driverAccountRef = null;
+            if (isOwnTruck) {
+                const driverAccount = yield (0, party_account_1.ensurePartyAccount)({
+                    kind: 'driver',
+                    refId: po.driverId,
+                    name: po.driverName || 'Driver',
+                    type: 'party',
+                });
+                driverAccountRef = yield resolveVoucherAccountRef(tx, driverAccount.code);
+            }
             const voucher = yield tx.voucher.create({
                 data: {
                     voucherNo: yield voucherNo(tx),
@@ -482,23 +547,59 @@ function approvePurchaseOrder(id) {
                     purchaseOrderId: po.id
                 }
             });
-            yield tx.voucherRow.createMany({
-                data: [
-                    {
-                        voucherId: voucher.id,
-                        accountId: inventoryAccountRef.id,
-                        dr: new client_1.Prisma.Decimal(totalCost),
-                        cr: new client_1.Prisma.Decimal(0),
-                        memo: `PO ${po.poNo} inventory`
+            const rows = [];
+						// 1. Inventory (FULL COST)
+						rows.push({
+							voucherId: voucher.id,
+							accountId: inventoryAccountRef.id,
+							dr: new client_1.Prisma.Decimal(totalCost),
+							cr: new client_1.Prisma.Decimal(0),
+							memo: `PO ${po.poNo} inventory`,
+						});
+            // 2. Seller (ONLY GOODS)
+            rows.push({
+                voucherId: voucher.id,
+                accountId: sellerAccountRef.id,
+                dr: new client_1.Prisma.Decimal(0),
+                cr: new client_1.Prisma.Decimal(basePurchase),
+                memo: `PO ${po.poNo} goods payable`,
+            });
+            // 3. Driver (ONLY TRANSPORT)
+            if (isOwnTruck && driverAccountRef && transportCost > 0) {
+                rows.push({
+                    voucherId: voucher.id,
+                    accountId: driverAccountRef.id,
+                    dr: new client_1.Prisma.Decimal(0),
+                    cr: new client_1.Prisma.Decimal(transportCost),
+                    memo: `PO ${po.poNo} transport`,
+                });
+            }
+            // 4. OTHER COST (loading + misc + bag)
+            const otherCost = headerLoading +
+                Number(po.misc) +
+                totalBags * bagCostPerBag;
+            if (otherCost > 0) {
+                const expenseAccount = yield tx.account.upsert({
+                    where: { code: 'AC-PURCHASE-EXP' },
+                    update: {},
+                    create: {
+                        code: 'AC-PURCHASE-EXP',
+                        name: 'Purchase Expenses',
+                        type: 'expense',
                     },
-                    {
-                        voucherId: voucher.id,
-                        accountId: sellerAccountRef.id,
-                        dr: new client_1.Prisma.Decimal(0),
-                        cr: new client_1.Prisma.Decimal(totalCost),
-                        memo: `PO ${po.poNo} payable`
-                    }
-                ]
+                });
+                const expenseRef = yield resolveVoucherAccountRef(tx, expenseAccount.code);
+                rows.push({
+									voucherId: voucher.id,
+									accountId: expenseRef.id,
+									dr: new client_1.Prisma.Decimal(0),
+									cr: new client_1.Prisma.Decimal(otherCost),
+									memo: `PO ${po.poNo} extra cost`,
+								});
+            }
+            // FINAL INSERT
+            yield tx.voucherRow.createMany({
+                data: rows,
             });
             yield postPurchaseAdvance(tx, po);
             const updated = yield tx.purchaseOrder.update({

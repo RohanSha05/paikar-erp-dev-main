@@ -130,7 +130,8 @@ export async function createSalesOrderDraft(input: CreateSalesOrderInput, userId
           rateBasis: item.rateBasis,
           rateValue: new Prisma.Decimal(item.rateValue),
           ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-          lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue))
+          lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+          bagCount: item.bagCount,
         }))
       }
     },
@@ -190,7 +191,8 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
             rateBasis: item.rateBasis,
             rateValue: new Prisma.Decimal(item.rateValue),
             ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue))
+            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+            bagCount: item.bagCount
           }))
         }
       },

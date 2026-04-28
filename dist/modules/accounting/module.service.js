@@ -50,6 +50,8 @@ function mapAccount(account) {
         name: account.name,
         type: account.type,
         active: account.active,
+        partyKind: account.partyKind,
+        partyRefId: account.partyRefId,
         opening: toNumber(account.opening),
     };
 }
@@ -209,6 +211,7 @@ function getLedger(accountId, from, to) {
                 dr: toNumber(row.dr),
                 cr: toNumber(row.cr),
                 balance,
+                createdAt: row.createdAt.toISOString(),
             };
         }));
         return {
@@ -289,9 +292,12 @@ function getExpenseSummary(year) {
         for (const voucher of vouchers) {
             const monthIndex = voucher.vdate.getMonth();
             const expenseAmount = voucher.rows.reduce((sum, row) => {
-                var _a;
+                var _a, _b;
                 const type = normalizeType(((_a = row.account) === null || _a === void 0 ? void 0 : _a.type) || '');
-                if (type !== 'expense' && type !== 'transport') {
+                const isDriverAccount = ((_b = row.account) === null || _b === void 0 ? void 0 : _b.partyKind) === 'driver';
+                if (type !== 'expense' &&
+                    type !== 'transport' &&
+                    !isDriverAccount) {
                     return sum;
                 }
                 return sum + toNumber(row.dr);

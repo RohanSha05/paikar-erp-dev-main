@@ -6,7 +6,8 @@ const salesItemSchema = z.object({
   productId: z.string().uuid().optional(),
   qtyKg: z.number().positive(),
   rateBasis: z.enum(['perKg', 'perMon']),
-  rateValue: z.number().positive()
+  rateValue: z.number().positive(),
+  bagCount : z.number().positive()
 });
 
 const customerSnapshotSchema = z.object({

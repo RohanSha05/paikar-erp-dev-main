@@ -529,7 +529,7 @@ export async function approvePurchaseOrder(id: string) {
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
           sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.actualKgPerBag) }
+          meta: { kgPerBag: Number(item.actualKgPerBag) , bagCount: Number(item.bagCount)}
         },
       });
 

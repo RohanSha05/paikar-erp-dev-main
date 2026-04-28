@@ -373,7 +373,7 @@ model SalesOrderItem {
   rateValue         Decimal     @db.Decimal(14, 3)
   ratePerKg         Decimal     @db.Decimal(14, 4)
   lineBase          Decimal     @db.Decimal(14, 2)
-
+  bagCount          Int         @default(0)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
