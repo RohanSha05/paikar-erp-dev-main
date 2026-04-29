@@ -1,3 +1,21 @@
+// Upsert Party Account Opening for API route
+// Accepts { partyKind, partyRefId, name, amount } from frontend and maps to CreateAccountInput
+export async function upsertPartyAccountOpening(payload: {
+	partyKind: string;
+	partyRefId: string;
+	name: string;
+	amount: number;
+}): Promise<AccountDto> {
+	const input: CreateAccountInput = {
+		name: payload.name,
+		type: 'party',
+		partyKind: payload.partyKind,
+		partyRefId: payload.partyRefId,
+		opening: payload.amount,
+		active: true,
+	};
+	return createAccount(input);
+}
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
@@ -119,27 +137,156 @@ export async function listAccounts(filterByType?: string): Promise<AccountDto[]>
 	return accounts.map(mapAccount);
 }
 
+// export async function createAccount(input: CreateAccountInput): Promise<AccountDto> {
+// 	const code = (input.code || (await generateAccountCode(input.type))).trim().toUpperCase();
+// 	const exists = await prisma.account.findUnique({ where: { code } });
+// 	if (exists) {
+// 		throw new HttpError(409, 'Account code already exists');
+// 	}
+
+// 	const account = await prisma.account.create({
+// 		data: {
+// 			code,
+// 			name: input.name.trim(),
+// 			type: input.type.trim(),
+// 			opening: input.opening !== undefined ? new Prisma.Decimal(input.opening) : undefined,
+// 			active: input.active !== false,
+// 			partyKind: input.partyKind?.trim() || undefined,
+// 			partyRefId: input.partyRefId?.trim() || undefined,
+// 			bankInfo: input.bankInfo?.trim() || undefined,
+// 		},
+// 	});
+
+// 	return mapAccount(account);
+// }
+
 export async function createAccount(input: CreateAccountInput): Promise<AccountDto> {
-	const code = (input.code || (await generateAccountCode(input.type))).trim().toUpperCase();
-	const exists = await prisma.account.findUnique({ where: { code } });
-	if (exists) {
-		throw new HttpError(409, 'Account code already exists');
-	}
+  const code = (input.code || (await generateAccountCode(input.type))).trim().toUpperCase();
 
-	const account = await prisma.account.create({
-		data: {
-			code,
-			name: input.name.trim(),
-			type: input.type.trim(),
-			opening: input.opening !== undefined ? new Prisma.Decimal(input.opening) : undefined,
-			active: input.active !== false,
-			partyKind: input.partyKind?.trim() || undefined,
-			partyRefId: input.partyRefId?.trim() || undefined,
-			bankInfo: input.bankInfo?.trim() || undefined,
-		},
-	});
+  // ── If account already exists for this party, post a voucher DR only ──
+  if (input.type === 'party' && input.partyKind && input.partyRefId) {
+    const existing = await prisma.account.findFirst({
+      where: {
+        type: 'party',
+        partyKind: input.partyKind.trim().toLowerCase(),
+        partyRefId: input.partyRefId.trim(),
+      },
+    });
 
-	return mapAccount(account);
+    if (existing) {
+      const openingAmount = Number(input.opening || 0);
+      if (openingAmount <= 0) return mapAccount(existing); // nothing to post
+
+      return prisma.$transaction(async (tx) => {
+        const equityAccount = await tx.account.upsert({
+          where: { code: 'AC-OPENING-EQUITY' },
+          update: {},
+          create: {
+            code: 'AC-OPENING-EQUITY',
+            name: 'Opening Balance Equity',
+            type: 'equity',
+            active: true,
+          },
+        });
+
+        const voucherNo = await nextDailySequenceIdForDelegate(
+          tx.voucher, 'voucherNo', 'VCH'
+        );
+
+        await tx.voucher.create({
+          data: {
+            voucherNo,
+            vtype: 'journal',
+            vdate: new Date(),
+            narration: `Opening balance — ${existing.name}`,
+            rows: {
+              create: [
+                {
+                  accountId: existing.id,
+                  dr: new Prisma.Decimal(openingAmount),
+                  cr: new Prisma.Decimal(0),
+                  memo: 'Opening balance',
+                },
+                {
+                  accountId: equityAccount.id,
+                  dr: new Prisma.Decimal(0),
+                  cr: new Prisma.Decimal(openingAmount),
+                  memo: 'Opening balance',
+                },
+              ],
+            },
+          },
+        });
+
+        return mapAccount(existing);
+      });
+    }
+  } else {
+    // Non-party: keep original 409 guard
+    const exists = await prisma.account.findUnique({ where: { code } });
+    if (exists) throw new HttpError(409, 'Account code already exists');
+  }
+
+  // ── CREATE path (unchanged) ───────────────────────────────────
+  return prisma.$transaction(async (tx) => {
+    const account = await tx.account.create({
+      data: {
+        code,
+        name: input.name.trim(),
+        type: input.type.trim(),
+        opening: input.opening !== undefined ? new Prisma.Decimal(input.opening) : undefined,
+        active: input.active !== false,
+        partyKind: input.partyKind?.trim() || undefined,
+        partyRefId: input.partyRefId?.trim() || undefined,
+        bankInfo: input.bankInfo?.trim() || undefined,
+      },
+    });
+
+    const openingAmount = Number(input.opening || 0);
+    if (openingAmount > 0) {
+      const equityAccount = await tx.account.upsert({
+        where: { code: 'AC-OPENING-EQUITY' },
+        update: {},
+        create: {
+          code: 'AC-OPENING-EQUITY',
+          name: 'Opening Balance Equity',
+          type: 'equity',
+          active: true,
+        },
+      });
+
+      const voucherNo = await nextDailySequenceIdForDelegate(
+        tx.voucher, 'voucherNo', 'VCH'
+      );
+
+      const voucher = await tx.voucher.create({
+        data: {
+          voucherNo,
+          vtype: 'journal',
+          vdate: new Date(),
+          narration: `Opening balance — ${account.name}`,
+        },
+      });
+
+      const isReceivable =
+        input.partyKind === 'customer' ||
+        ['cash', 'bank', 'asset'].includes(input.type.trim().toLowerCase());
+
+      await tx.voucherRow.createMany({
+        data: isReceivable
+          ? [
+              { voucherId: voucher.id, accountId: account.id,       dr: new Prisma.Decimal(openingAmount), cr: new Prisma.Decimal(0),            memo: 'Opening balance' },
+              { voucherId: voucher.id, accountId: equityAccount.id, dr: new Prisma.Decimal(0),            cr: new Prisma.Decimal(openingAmount), memo: 'Opening balance' },
+            ]
+          : [
+              { voucherId: voucher.id, accountId: equityAccount.id, dr: new Prisma.Decimal(openingAmount), cr: new Prisma.Decimal(0),            memo: 'Opening balance' },
+              { voucherId: voucher.id, accountId: account.id,       dr: new Prisma.Decimal(0),            cr: new Prisma.Decimal(openingAmount), memo: 'Opening balance' },
+            ],
+      });
+    }
+
+    return mapAccount(account);
+  });
 }
 
 export async function getDaybook(dateISO: string) {

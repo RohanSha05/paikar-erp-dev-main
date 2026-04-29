@@ -84,6 +84,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
       refId: seller.id,
       name: seller.name,
       type: 'party',
+      code: `PTY-SELLER-${seller.id}`.slice(0, 64),
     });
 
     return {
@@ -112,6 +113,8 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
       refId: customer.id,
       name: customer.name,
       type: 'party',
+      code: `PTY-CUSTOMER-${customer.id}`.slice(0, 64),
+      
     });
 
     return {
@@ -147,6 +150,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
       refId: driver.id,
       name: driver.name,
       type: 'party',
+      code: `PTY-DRIVER-${driver.id}`.slice(0, 64),
     });
 
     return {
@@ -182,6 +186,7 @@ export async function createParty(input: CreatePartyInput): Promise<PartyDto> {
       refId: investor.id,
       name: investor.name,
       type: 'party',
+      code: `PTY-INVESTOR-${investor.id}`.slice(0, 64),
     });
 
     return {
@@ -273,74 +278,89 @@ export async function listParties(
       : Promise.resolve([]),
     prisma.account.findMany({
       where: { type: 'party' },
-      select: { id: true, partyKind: true, partyRefId: true },
+      select: { id: true, partyKind: true, partyRefId: true , opening: true,},
     }),
   ]);
 
-  const accountByRef = new Map<string, string>();
+  
+  const accountByRef = new Map<string, { id: string; opening: number }>();
   for (const account of linkedAccounts) {
     const k = `${(account.partyKind || '').toLowerCase()}:${account.partyRefId || ''}`;
     if (account.partyKind && account.partyRefId && !accountByRef.has(k)) {
-      accountByRef.set(k, account.id);
+      accountByRef.set(k, {
+        id: account.id,
+        opening: account.opening ? Number(account.opening) : 0,
+      });
+    
+    
+    // for a specific seller:
+    sellers.forEach(s => {
+      const key = `seller:${s.id}`;
+    });
     }
   }
 
   const rows: PartyDto[] = [];
 
   for (const seller of sellers) {
-    rows.push({
-      id: seller.id,
-      code: masterPartyCode('seller', seller.id),
-      name: seller.name,
-      type: 'seller',
-      active: true,
-      accountId: accountByRef.get(`seller:${seller.id}`),
-    });
-  }
+  rows.push({
+    id: seller.id,
+    code: masterPartyCode('seller', seller.id),
+    name: seller.name,
+    type: 'seller',
+    active: true,
+    accountId: accountByRef.get(`seller:${seller.id}`)?.id,
+    opening: accountByRef.get(`seller:${seller.id}`)?.opening ?? 0,
+  });
+}
 
-  for (const customer of customers) {
-    rows.push({
-      id: customer.id,
-      code: masterPartyCode('customer', customer.id),
-      name: customer.name,
-      type: 'customer',
-      active: true,
-      accountId: accountByRef.get(`customer:${customer.id}`),
-    });
-  }
+for (const customer of customers) {
+  rows.push({
+    id: customer.id,
+    code: masterPartyCode('customer', customer.id),
+    name: customer.name,
+    type: 'customer',
+    active: true,
+    accountId: accountByRef.get(`customer:${customer.id}`)?.id,
+    opening: accountByRef.get(`customer:${customer.id}`)?.opening ?? 0,
+  });
+}
 
-  for (const driver of drivers) {
-    rows.push({
-      id: driver.id,
-      code: masterPartyCode('driver', driver.id),
-      name: driver.name,
-      type: 'driver',
-      active: driver.active,
-      accountId: accountByRef.get(`driver:${driver.id}`),
-    });
-  }
+for (const driver of drivers) {
+  rows.push({
+    id: driver.id,
+    code: masterPartyCode('driver', driver.id),
+    name: driver.name,
+    type: 'driver',
+    active: driver.active,
+    accountId: accountByRef.get(`driver:${driver.id}`)?.id,
+    opening: accountByRef.get(`driver:${driver.id}`)?.opening ?? 0,
+  });
+}
 
-  for (const investor of investors) {
-    rows.push({
-      id: investor.id,
-      code: masterPartyCode('investor', investor.id),
-      name: investor.name,
-      type: 'investor',
-      active: investor.active,
-      accountId: accountByRef.get(`investor:${investor.id}`),
-    });
-  }
+for (const investor of investors) {
+  rows.push({
+    id: investor.id,
+    code: masterPartyCode('investor', investor.id),
+    name: investor.name,
+    type: 'investor',
+    active: investor.active,
+    accountId: accountByRef.get(`investor:${investor.id}`)?.id,
+    opening: accountByRef.get(`investor:${investor.id}`)?.opening ?? 0,
+  });
+}
 
-  for (const party of parties) {
-    rows.push({
-      id: party.id,
-      code: party.code,
-      name: party.name,
-      type: party.type.toLowerCase(),
-      active: party.active,
-      accountId: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`),
-    });
-  }
+for (const party of parties) {
+  rows.push({
+    id: party.id,
+    code: party.code,
+    name: party.name,
+    type: party.type.toLowerCase(),
+    active: party.active,
+    accountId: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`)?.id,
+    opening: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`)?.opening ?? 0,
+  });
+}
 
   return rows.sort((a, b) => {
     if (a.type !== b.type) return a.type.localeCompare(b.type);
@@ -540,7 +560,6 @@ async function ensureRoundingAccountId(): Promise<string> {
     },
     select: { id: true },
   });
-
   return account.id;
 }
 

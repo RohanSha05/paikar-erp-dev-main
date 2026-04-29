@@ -51,6 +51,7 @@ enum PurchaseStatus {
 enum RateBasis {
   perKg
   perMon
+  perBag
 }
 
 enum SalesStatus {

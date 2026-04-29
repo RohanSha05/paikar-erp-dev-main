@@ -24,7 +24,7 @@ const purchaseItemSchema = z.object({
   actualKgPerBag: z.number().nonnegative(),
   accountingKgPerBag: z.number().nonnegative(),
   weightPolicy: z.enum(['actual', 'accounting']),
-  rateBasis: z.enum(['perKg', 'perMon']),
+  rateBasis: z.enum(['perKg', 'perMon', 'perBag']),
   rateValue: z.number().nonnegative()
 });
 

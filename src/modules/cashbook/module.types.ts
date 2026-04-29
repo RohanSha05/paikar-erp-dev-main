@@ -9,6 +9,7 @@ export interface AccountDto {
   type: string;
   active: boolean;
   opening?: number;
+  
 }
 
 export interface PartyDto {
@@ -18,6 +19,7 @@ export interface PartyDto {
   type: string;
   active: boolean;
   accountId?: string;
+  opening?: number;
 }
 
 export interface CreatePartyInput {

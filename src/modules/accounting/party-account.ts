@@ -26,35 +26,29 @@ export function partyAccountCode(kind: string, refId: string) {
 	return `PTY-${safeKind}-${safeRef}`.slice(0, 64);
 }
 
-export async function ensurePartyAccount(input: EnsurePartyAccountInput) {
-	const code = (input.code || partyAccountCode(input.kind, input.refId)).trim();
-	const kind = input.kind.trim().toLowerCase();
-	const refId = input.refId.trim();
-	const name = input.name.trim();
+export async function ensurePartyAccount(params: {
+  kind: string;
+  refId: string;
+  name: string;
+  type: string;
+  code?: string;
+}) {
+  const code = params.code || `AC-${params.kind.toUpperCase()}-${params.refId}`.slice(0, 64);
 
-	const existing = await prisma.account.findFirst({
-		where: {
-			OR: [
-				{ code },
-				{ partyKind: kind, partyRefId: refId },
-			],
-		},
-	});
-
-	if (existing) {
-		return existing;
-	}
-
-	return prisma.account.create({
-		data: {
-			code,
-			name,
-			type: input.type?.trim() || 'party',
-			partyKind: kind,
-			partyRefId: refId,
-			bankInfo: input.bankInfo?.trim() || undefined,
-			opening: new Prisma.Decimal(0),
-			active: true,
-		},
-	});
+  return prisma.account.upsert({
+    where: { code },
+    update: {
+      name: params.name,
+      partyKind: params.kind,   // ✅ must update these
+      partyRefId: params.refId, // ✅ on every upsert
+    },
+    create: {
+      code,
+      name: params.name,
+      type: params.type,
+      partyKind: params.kind,   // ✅ must be set on create
+      partyRefId: params.refId, // ✅ must be set on create
+      active: true,
+    },
+  });
 }

@@ -7,8 +7,11 @@ import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 
 const KG_PER_MON = 40;
 
-function ratePerKg(rateBasis: 'perKg' | 'perMon', rateValue: number) {
-  return rateBasis === 'perKg' ? rateValue : rateValue / KG_PER_MON;
+function ratePerKg(rateBasis: 'perKg' | 'perMon' | 'perBag', rateValue: number, bagCount = 0, stockKg = 0) {
+  if (rateBasis === 'perKg') return rateValue;
+  if (rateBasis === 'perMon') return rateValue / KG_PER_MON;
+  // perBag: derive effective ratePerKg from total bag cost
+  return stockKg > 0 ? (bagCount * rateValue) / stockKg : 0;
 }
 
 async function lotNo(tx: Prisma.TransactionClient) {
@@ -34,12 +37,14 @@ function buildLotLabel(params: {
   category: string;
   productName: string;
   weightKg: number;
+  rateBasis: 'perKg' | 'perMon' | 'perBag';  
+  rateValue: number;      
 }) {
   const clean = (v: string) =>
-    v
-      .trim()
-      .replace(/\s+/g, '') // remove spaces
-      .replace(/[^\p{L}\p{N}]/gu, ''); // keep ALL unicode letters + numbers
+  v
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[^\p{L}\p{N}\p{M}]/gu, ''); 
 
   const formatLotSeq = (lotNo: string) => {
     // extract last numeric part safely → LOT-005 → 005
@@ -89,10 +94,16 @@ function computePurchaseTotals(order: any) {
     const actualKg = bags * numberValue(item?.actualKgPerBag);
     const accountingKg = bags * numberValue(item?.accountingKgPerBag);
     const stockKg = item?.weightPolicy === 'actual' ? actualKg : accountingKg;
-    const lineRatePerKg = ratePerKg(item?.rateBasis as 'perKg' | 'perMon', numberValue(item?.rateValue));
+    let lineBase: number;
+if (item?.rateBasis === 'perBag') {
+  lineBase = bags * numberValue(item?.rateValue);
+} else {
+  const lineRatePerKg = ratePerKg(item?.rateBasis as 'perKg' | 'perMon', numberValue(item?.rateValue));
+  lineBase = stockKg * lineRatePerKg;
+}
+basePurchase += lineBase;
 
     totalBags += bags;
-    basePurchase += stockKg * lineRatePerKg;
   }
 
   const bagCostMode = order?.bagCostMode || 'paid';
@@ -485,9 +496,16 @@ export async function approvePurchaseOrder(id: string) {
         throw new HttpError(400, `Invalid stock quantity for product ${item.productId}: calculated as ${stockKg} kg`);
       }
 
-      const rpk = ratePerKg(item.rateBasis as 'perKg' | 'perMon', Number(item.rateValue));
+     let lineBase: number;
+     let rpk: number;
 
-      const lineBase = stockKg * rpk;
+    if (item.rateBasis === 'perBag') {
+      lineBase = item.bagCount * Number(item.rateValue);       // bags × rate
+      rpk = stockKg > 0 ? lineBase / stockKg : 0;             // effective rate for avgCost
+    } else {
+      rpk = ratePerKg(item.rateBasis as 'perKg' | 'perMon', Number(item.rateValue));
+      lineBase = stockKg * rpk;
+    }
       totalBags += item.bagCount;
       totalStockKg += stockKg;
       basePurchase += lineBase;
@@ -522,6 +540,8 @@ export async function approvePurchaseOrder(id: string) {
           category: product?.category || 'GEN',
           productName: product?.name || 'UNKNOWN',
           weightKg: stockKg,
+          rateBasis: item.rateBasis as 'perKg' | 'perMon' | 'perBag',  // ✅ ADD
+          rateValue: Number(item.rateValue), 
         }),
           productId: item.productId,
           warehouseId: po.warehouseId,

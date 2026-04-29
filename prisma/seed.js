@@ -59,9 +59,7 @@ async function main() {
         update: {},
         create: { code: 'WH-1', name: 'Main Warehouse' }
     });
-    await prisma.seller.create({
-        data: { name: 'Default Seller', district: 'Naogaon', market: 'Manda' }
-    }).catch(() => { });
+
     await prisma.product.upsert({
         where: { code: 'P28' },
         update: {},

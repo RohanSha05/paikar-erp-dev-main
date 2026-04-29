@@ -5,7 +5,7 @@ CREATE TYPE "UserRole" AS ENUM ('ADMIN', 'OPERATOR', 'VIEWER');
 CREATE TYPE "PurchaseStatus" AS ENUM ('DRAFT', 'APPROVED');
 
 -- CreateEnum
-CREATE TYPE "RateBasis" AS ENUM ('perKg', 'perMon');
+CREATE TYPE "RateBasis" AS ENUM ('perKg', 'perMon', 'perBag');
 
 -- CreateEnum
 CREATE TYPE "SalesStatus" AS ENUM ('DRAFT', 'CONFIRMED');
@@ -301,6 +301,7 @@ CREATE TABLE "SalesOrderItem" (
     "rateValue" DECIMAL(14,3) NOT NULL,
     "ratePerKg" DECIMAL(14,4) NOT NULL,
     "lineBase" DECIMAL(14,2) NOT NULL,
+    "bagCount" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
