@@ -5,6 +5,8 @@ export type CreateCustomerInput = {
   market?: string;
   phone?: string;
   type?: 'mill' | 'retailer' | 'other';
+  nidNumber?: string;
+  emergencyPhone?: string;
 };
 
 export type UpdateCustomerInput = {
@@ -14,4 +16,6 @@ export type UpdateCustomerInput = {
   market?: string;
   phone?: string;
   type?: 'mill' | 'retailer' | 'other';
+  nidNumber?: string;
+  emergencyPhone?: string;
 };

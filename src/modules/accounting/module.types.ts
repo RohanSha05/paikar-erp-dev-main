@@ -3,17 +3,21 @@ export interface AccountDto {
 	code: string;
 	name: string;
 	type: string; 
-	partyKind : string;
-  	partyRefId : string;
+	partyKind?: string;
+	partyRefId?: string;
 	active: boolean;
 	opening?: number;
+  openingDr?: number;
+  openingCr?: number;
 }
 
 export interface CreateAccountInput {
 	code?: string;
 	name: string;
 	type: string;
-	opening?: number;
+	 opening?: number;
+  openingDr?: number;
+  openingCr?: number;
 	active?: boolean;
 	partyKind?: string;
 	partyRefId?: string;

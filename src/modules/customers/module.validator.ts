@@ -9,7 +9,9 @@ export const createCustomerSchema = z.object({
     district: z.string().max(120).optional(),
     market: z.string().max(120).optional(),
     phone: z.string().max(40).optional(),
-    type: customerTypeSchema.optional()
+    type: customerTypeSchema.optional(),
+    nidNumber: z.string().max(50).optional(),
+    emergencyPhone: z.string().max(40).optional()
   })
 });
 
@@ -24,7 +26,9 @@ export const updateCustomerSchema = z.object({
       district: z.string().max(120).optional(),
       market: z.string().max(120).optional(),
       phone: z.string().max(40).optional(),
-      type: customerTypeSchema.optional()
+      type: customerTypeSchema.optional(),
+      nidNumber: z.string().max(50).optional(),
+      emergencyPhone: z.string().max(40).optional()
     })
     .refine((data) => Object.keys(data).length > 0, {
       message: 'At least one field is required'

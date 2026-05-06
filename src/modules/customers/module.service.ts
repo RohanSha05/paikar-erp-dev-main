@@ -10,7 +10,18 @@ export async function listCustomers() {
 }
 
 export async function createCustomer(input: CreateCustomerInput) {
-  const customer = await prisma.customer.create({ data: input });
+  const customer = await prisma.customer.create({
+    data: {
+      name: input.name,
+      district: input.district,
+      market: input.market,
+      phone: input.phone,
+      address: input.address,
+      type: input.type || 'other',
+      nidNumber: input.nidNumber,
+      emergencyPhone: input.emergencyPhone,
+    },
+  });
 
   await ensurePartyAccount({
     kind: 'customer',
@@ -30,7 +41,16 @@ export async function updateCustomer(id: string, input: UpdateCustomerInput) {
 
   const updatedCustomer = await prisma.customer.update({
     where: { id },
-    data: input
+    data: {
+      name: input.name ?? existingCustomer.name,
+      district: input.district ?? existingCustomer.district,
+      market: input.market ?? existingCustomer.market,
+      phone: input.phone ?? existingCustomer.phone,
+      address: input.address ?? existingCustomer.address,
+      type: input.type ?? existingCustomer.type,
+      nidNumber: input.nidNumber ?? existingCustomer.nidNumber,
+      emergencyPhone: input.emergencyPhone ?? existingCustomer.emergencyPhone,
+    },
   });
 
   await ensurePartyAccount({

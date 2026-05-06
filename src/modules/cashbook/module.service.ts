@@ -580,6 +580,18 @@ export async function createVoucher(
     memo: row.memo,
   }));
 
+  // Debug log for payment vouchers
+  if (input.narration?.includes('payment') || input.narration?.includes('receipt')) {
+    console.log('🔍 Settlement voucher:', {
+      narration: input.narration,
+      rows: rows.map((r) => ({
+        dr: r.dr,
+        cr: r.cr,
+        memo: r.memo,
+      })),
+    });
+  }
+
   const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
   const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
   const diff = round2(totalDr - totalCr);

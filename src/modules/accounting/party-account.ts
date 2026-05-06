@@ -33,21 +33,25 @@ export async function ensurePartyAccount(params: {
   type: string;
   code?: string;
 }) {
-  const code = params.code || `AC-${params.kind.toUpperCase()}-${params.refId}`.slice(0, 64);
+  const kind = params.kind.trim().toLowerCase();
+  const refId = params.refId.trim();
+  const code = params.code || `AC-${kind.toUpperCase()}-${refId}`.slice(0, 64);
 
   return prisma.account.upsert({
     where: { code },
     update: {
-      name: params.name,
-      partyKind: params.kind,   // ✅ must update these
-      partyRefId: params.refId, // ✅ on every upsert
+      name: params.name.trim(),
+      type: params.type,
+      partyKind: kind,
+      partyRefId: refId,
+      active: true,
     },
     create: {
       code,
-      name: params.name,
+      name: params.name.trim(),
       type: params.type,
-      partyKind: params.kind,   // ✅ must be set on create
-      partyRefId: params.refId, // ✅ must be set on create
+      partyKind: kind,
+      partyRefId: refId,
       active: true,
     },
   });

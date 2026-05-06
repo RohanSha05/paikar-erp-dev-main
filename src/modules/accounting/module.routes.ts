@@ -21,7 +21,7 @@ router.post(
   async (req, res, next) => {
     try {
       const result = await upsertPartyAccountOpening(req.body);
-      res.json(result);
+      res.json({ success: true, data: result });
     } catch (err) {
       next(err);
     }

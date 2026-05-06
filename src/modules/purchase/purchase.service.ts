@@ -184,8 +184,19 @@ async function postPurchaseAdvance(tx: any, po: any) {
   });
 
   const sellerAccountRef = await resolveVoucherAccountRef(tx, sellerAccount.code);
-  const instrumentKey = String(po.advanceInstrumentId || 'AC-CASH').trim();
-  const instrumentAccountRef = await resolveVoucherAccountRef(tx, instrumentKey);
+  const instrumentKey = String(po.advanceInstrumentId || '').trim();
+  const instrumentAccountRef = instrumentKey
+    ? await resolveVoucherAccountRef(tx, instrumentKey)
+    : await tx.account.upsert({
+        where: { code: 'AC-CASH' },
+        update: {},
+        create: {
+          code: 'AC-CASH',
+          name: 'Cash',
+          type: 'cash',
+          active: true,
+        },
+      });
 
   const voucher = await tx.voucher.create({
     data: {
