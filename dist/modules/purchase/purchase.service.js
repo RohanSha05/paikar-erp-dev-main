@@ -85,38 +85,71 @@ function numberValue(value) {
 function computePurchaseTotals(order) {
     var _a;
     const items = Array.isArray(order === null || order === void 0 ? void 0 : order.items) ? order.items : [];
+    const bagCostMode = (order === null || order === void 0 ? void 0 : order.bagCostMode) || 'paid';
+    const bagCostPerBag = numberValue(order === null || order === void 0 ? void 0 : order.bagCostPerBag);
+    const transport = numberValue(order === null || order === void 0 ? void 0 : order.transport);
+    const loadingUnloading = numberValue((_a = order === null || order === void 0 ? void 0 : order.loadingUnloading) !== null && _a !== void 0 ? _a : order === null || order === void 0 ? void 0 : order.loading);
+    const misc = numberValue(order === null || order === void 0 ? void 0 : order.misc);
+    const headerExtraCosts = transport + loadingUnloading + misc;
     let totalBags = 0;
     let basePurchase = 0;
-    for (const item of items) {
+    let totalStockKg = 0;
+    const rawLines = items.map((item) => {
         const bags = numberValue(item === null || item === void 0 ? void 0 : item.bagCount);
         const actualKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.actualKgPerBag);
         const accountingKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.accountingKgPerBag);
         const stockKg = (item === null || item === void 0 ? void 0 : item.weightPolicy) === 'actual' ? actualKg : accountingKg;
-        let lineBase;
-        if ((item === null || item === void 0 ? void 0 : item.rateBasis) === 'perBag') {
-            lineBase = bags * numberValue(item === null || item === void 0 ? void 0 : item.rateValue);
+        const rateBasis = ((item === null || item === void 0 ? void 0 : item.rateBasis) || 'perMon');
+        const rateValue = numberValue(item === null || item === void 0 ? void 0 : item.rateValue);
+        let baseCost = 0;
+        if (rateBasis === 'perBag') {
+            baseCost = bags * rateValue;
         }
         else {
-            const lineRatePerKg = ratePerKg(item === null || item === void 0 ? void 0 : item.rateBasis, numberValue(item === null || item === void 0 ? void 0 : item.rateValue));
-            lineBase = stockKg * lineRatePerKg;
+            const lineRatePerKg = ratePerKg(rateBasis, rateValue);
+            baseCost = stockKg * lineRatePerKg;
         }
-        basePurchase += lineBase;
         totalBags += bags;
-    }
-    const bagCostMode = (order === null || order === void 0 ? void 0 : order.bagCostMode) || 'paid';
-    const bagCostPerBag = numberValue(order === null || order === void 0 ? void 0 : order.bagCostPerBag);
+        totalStockKg += stockKg;
+        basePurchase += baseCost;
+        return {
+            product: resolveItemDisplayName(item, (item === null || item === void 0 ? void 0 : item.productName) || ''),
+            bags,
+            actualKg,
+            accountingKg,
+            stockKg,
+            baseCost,
+            bagCost: 0,
+            headerCostShare: 0,
+            lineCost: 0,
+            avgPerKg: 0,
+            avgPerMon: 0,
+            rateBasis,
+            rateValue,
+        };
+    });
     const bagCostTotal = bagCostMode === 'self' ? 0 : totalBags * bagCostPerBag;
-    const extraCosts = numberValue(order === null || order === void 0 ? void 0 : order.transport) +
-        numberValue((_a = order === null || order === void 0 ? void 0 : order.loadingUnloading) !== null && _a !== void 0 ? _a : order === null || order === void 0 ? void 0 : order.loading) +
-        numberValue(order === null || order === void 0 ? void 0 : order.misc) +
-        bagCostTotal;
+    const extraCosts = headerExtraCosts + bagCostTotal;
     const totalCost = basePurchase + extraCosts;
+    const productSummaries = rawLines.map((line) => {
+        const bagCost = bagCostMode === 'self' ? 0 : line.bags * bagCostPerBag;
+        const headerCostShare = totalStockKg > 0 ? headerExtraCosts * (line.stockKg / totalStockKg) : 0;
+        const lineCost = line.baseCost + bagCost + headerCostShare;
+        const avgPerKg = line.stockKg > 0 ? lineCost / line.stockKg : 0;
+        return Object.assign(Object.assign({}, line), { bagCost,
+            headerCostShare,
+            lineCost,
+            avgPerKg, avgPerMon: avgPerKg * KG_PER_MON });
+    });
     return {
         totalBags,
+        totalStockKg,
         basePurchase,
         bagCostTotal,
+        headerExtraCosts,
         extraCosts,
         totalCost,
+        productSummaries,
     };
 }
 function computeInitialStockKg(order) {
@@ -223,16 +256,18 @@ function toPurchaseOrderDto(order) {
     const initialStockKg = computeInitialStockKg(order);
     const remainingStockKg = computeRemainingStockKg(order);
     const soldState = computeSoldState(order, initialStockKg, remainingStockKg);
-    return Object.assign(Object.assign({}, order), { sellerSnapshot: (order === null || order === void 0 ? void 0 : order.seller)
-            ? {
-                id: order.seller.id,
-                name: order.seller.name,
-                address: order.seller.address,
-                district: order.seller.district,
-                market: order.seller.market,
-                phone: order.seller.phone,
-            }
-            : order === null || order === void 0 ? void 0 : order.sellerSnapshot, totals: Object.assign(Object.assign({}, ((order === null || order === void 0 ? void 0 : order.totals) || {})), totals), totalCost: totals.totalCost, initialStockKg,
+    return Object.assign(Object.assign({}, order), { sellerSnapshot: (order === null || order === void 0 ? void 0 : order.sellerSnapshot)
+            ? order.sellerSnapshot
+            : (order === null || order === void 0 ? void 0 : order.seller)
+                ? {
+                    id: order.seller.id,
+                    name: order.seller.name,
+                    address: order.seller.address,
+                    district: order.seller.district,
+                    market: order.seller.market,
+                    phone: order.seller.phone,
+                }
+                : order === null || order === void 0 ? void 0 : order.sellerSnapshot, totals: Object.assign(Object.assign({}, ((order === null || order === void 0 ? void 0 : order.totals) || {})), totals), totalCost: totals.totalCost, initialStockKg,
         remainingStockKg,
         soldState });
 }
@@ -242,6 +277,7 @@ function listPurchaseOrders() {
             include: {
                 seller: true,
                 warehouse: true,
+                destinationCustomer: true,
                 items: true,
                 lots: {
                     select: {
@@ -263,6 +299,7 @@ function getPurchaseOrderById(id) {
             include: {
                 seller: true,
                 warehouse: true,
+                destinationCustomer: true,
                 items: true,
                 lots: {
                     include: {
@@ -345,7 +382,16 @@ function createDraft(input) {
                 }
             },
             include: { items: true }
-        });
+        }).then((created) => __awaiter(this, void 0, void 0, function* () {
+            if (input.sellerSnapshot) {
+                yield prisma_1.prisma.$executeRaw `
+        UPDATE "PurchaseOrder"
+        SET "sellerSnapshot" = ${JSON.stringify(input.sellerSnapshot)}::jsonb
+        WHERE id = ${created.id}
+      `;
+            }
+            return created;
+        }));
     });
 }
 function updatePurchaseOrderDraft(id, input) {
@@ -421,6 +467,13 @@ function updatePurchaseOrderDraft(id, input) {
                     items: true
                 }
             });
+            if (input.sellerSnapshot) {
+                yield tx.$executeRaw `
+        UPDATE "PurchaseOrder"
+        SET "sellerSnapshot" = ${JSON.stringify(input.sellerSnapshot)}::jsonb
+        WHERE id = ${updated.id}
+      `;
+            }
             return {
                 success: true,
                 message: 'Purchase order draft updated',
@@ -432,7 +485,7 @@ function updatePurchaseOrderDraft(id, input) {
 function approvePurchaseOrder(id) {
     return __awaiter(this, void 0, void 0, function* () {
         return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
-            var _a;
+            var _a, _b, _c;
             const po = yield tx.purchaseOrder.findUnique({
                 where: { id },
                 include: {
@@ -452,12 +505,13 @@ function approvePurchaseOrder(id) {
             if (isOwnTruck && !po.driverId) {
                 throw new httpError_1.HttpError(400, 'Driver is required for OWN_TRUCK');
             }
+            const costBreakdown = computePurchaseTotals(po);
             let totalBags = 0;
             let basePurchase = 0;
             let totalStockKg = 0;
             const poExtended = po;
             const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
-            for (const item of po.items) {
+            for (const [index, item] of po.items.entries()) {
                 const bagCount = Number(item.bagCount);
                 if (!Number.isFinite(bagCount) || bagCount <= 0) {
                     throw new httpError_1.HttpError(400, `Invalid bag count for product ${item.productId}: must be greater than 0`);
@@ -486,8 +540,9 @@ function approvePurchaseOrder(id) {
                 totalBags += item.bagCount;
                 totalStockKg += stockKg;
                 basePurchase += lineBase;
-                const lineCost = lineBase + item.bagCount * bagCostPerBag;
-                const avgCostPerKg = stockKg > 0 ? lineCost / stockKg : 0;
+                const lineSummary = costBreakdown.productSummaries[index];
+                const lineCost = (_a = lineSummary === null || lineSummary === void 0 ? void 0 : lineSummary.lineCost) !== null && _a !== void 0 ? _a : (lineBase + item.bagCount * bagCostPerBag);
+                const avgCostPerKg = (_b = lineSummary === null || lineSummary === void 0 ? void 0 : lineSummary.avgPerKg) !== null && _b !== void 0 ? _b : (stockKg > 0 ? lineCost / stockKg : 0);
                 const product = yield tx.product.findUnique({
                     where: { id: item.productId },
                     select: {
@@ -498,9 +553,6 @@ function approvePurchaseOrder(id) {
                 });
                 const nextLotNo = yield lotNo(tx);
                 const sellerName = po.seller.name;
-                const KG_PER_MON = 40;
-                const monValue = stockKg / KG_PER_MON;
-                console.log('PRODUCT DEBUG:', product);
                 const lot = yield tx.lot.create({
                     data: {
                         lotNo: nextLotNo,
@@ -511,7 +563,7 @@ function approvePurchaseOrder(id) {
                             category: (product === null || product === void 0 ? void 0 : product.category) || 'GEN',
                             productName: (product === null || product === void 0 ? void 0 : product.name) || 'UNKNOWN',
                             weightKg: stockKg,
-                            rateBasis: item.rateBasis, // ✅ ADD
+                            rateBasis: item.rateBasis,
                             rateValue: Number(item.rateValue),
                         }),
                         productId: item.productId,
@@ -535,7 +587,7 @@ function approvePurchaseOrder(id) {
                     }
                 });
             }
-            const headerLoading = Number((_a = poExtended.loadingUnloading) !== null && _a !== void 0 ? _a : po.loading);
+            const headerLoading = Number((_c = poExtended.loadingUnloading) !== null && _c !== void 0 ? _c : po.loading);
             const transportCost = Number(po.transport);
             const extraCosts = transportCost +
                 headerLoading +
@@ -572,7 +624,7 @@ function approvePurchaseOrder(id) {
                     voucherNo: yield voucherNo(tx),
                     vtype: 'journal',
                     vdate: new Date(),
-                    narration: `Auto purchase approval for ${po.poNo}`,
+                    narration: `Auto purchase approval for ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
                     purchaseOrderId: po.id
                 }
             });
@@ -600,7 +652,7 @@ function approvePurchaseOrder(id) {
                     accountId: driverAccountRef.id,
                     dr: new client_1.Prisma.Decimal(0),
                     cr: new client_1.Prisma.Decimal(transportCost),
-                    memo: `PO ${po.poNo} transport`,
+                    memo: `PO ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
                 });
             }
             // 4. OTHER COST (loading + misc + bag)
@@ -642,7 +694,8 @@ function approvePurchaseOrder(id) {
                     stockKg: totalStockKg,
                     basePurchase,
                     extraCosts,
-                    totalCost
+                    totalCost,
+                    productSummaries: costBreakdown.productSummaries,
                 },
                 voucherNo: voucher.voucherNo
             };

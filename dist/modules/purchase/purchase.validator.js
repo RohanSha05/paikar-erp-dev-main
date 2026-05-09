@@ -9,14 +9,14 @@ const sellerSnapshotSchema = zod_1.z.object({
     district: zod_1.z.string().optional(),
     market: zod_1.z.string().optional(),
     phone: zod_1.z.string().optional()
-}).optional();
+}).optional().nullable();
 const destinationRefSchema = zod_1.z.object({
     type: zod_1.z.enum(['warehouse', 'mill']),
     id: zod_1.z.string().min(1),
     name: zod_1.z.string().optional()
 }).nullable().optional();
 const purchaseItemSchema = zod_1.z.object({
-    productId: zod_1.z.string().uuid(),
+    productId: zod_1.z.string().min(1),
     productType: zod_1.z.string().min(1).optional(),
     productName: zod_1.z.string().min(1).optional(),
     id: zod_1.z.string().optional(),
@@ -59,17 +59,17 @@ exports.createPurchaseOrderSchema = zod_1.z.object({
 });
 exports.updatePurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
-        id: zod_1.z.string().uuid()
+        id: zod_1.z.string().min(1)
     }),
     body: exports.createPurchaseOrderDraftSchema
 });
 exports.getPurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
-        id: zod_1.z.string().uuid()
+        id: zod_1.z.string().min(1)
     })
 });
 exports.approvePurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
-        id: zod_1.z.string().uuid()
+        id: zod_1.z.string().min(1)
     })
 });

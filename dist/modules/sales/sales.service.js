@@ -37,6 +37,22 @@ function voucherNo(tx_1) {
 function ratePerKg(rateBasis, rateValue) {
     return rateBasis === 'perKg' ? rateValue : rateValue / 40;
 }
+function validateLotsForCustomer(items, customerId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
+        const lotIds = items.map((item) => item.lotId);
+        const lots = yield prisma_1.prisma.lot.findMany({
+            where: { id: { in: lotIds } },
+            include: { sourcePo: { include: { destinationCustomer: true } } }
+        });
+        for (const lot of lots) {
+            if (((_a = lot.sourcePo) === null || _a === void 0 ? void 0 : _a.destinationCustomerId) && lot.sourcePo.destinationCustomerId !== customerId) {
+                const sourcePo = lot.sourcePo;
+                throw new httpError_1.HttpError(400, `এই lot "${lot.label || lot.id}" ${((_b = sourcePo.destinationCustomer) === null || _b === void 0 ? void 0 : _b.name) || "নির্দিষ্ট customer"}-এর জন্য বরাদ্দ। এটি শুধু ওই customer-এর কাছেই বিক্রি করা যাবে।`);
+            }
+        }
+    });
+}
 function getCustomerSnapshot(customerId, snapshot) {
     return __awaiter(this, void 0, void 0, function* () {
         var _a, _b, _c, _d;
@@ -118,6 +134,8 @@ function createSalesOrderDraft(input, userId) {
         if (!customer) {
             throw new httpError_1.HttpError(404, 'Customer not found');
         }
+        // Validate that lots are available for this customer
+        yield validateLotsForCustomer(input.items, input.customerId);
         const customerSnapshot = yield getCustomerSnapshot(input.customerId, input.customerSnapshot);
         const totals = buildTotals(input.items, input.transport, input.loadingUnloading, input.misc);
         return prisma_1.prisma.salesOrder.create({
@@ -174,6 +192,8 @@ function updateSalesOrderDraft(id, input) {
         if (!customer) {
             throw new httpError_1.HttpError(404, 'Customer not found');
         }
+        // Validate that lots are available for this customer
+        yield validateLotsForCustomer(input.items, input.customerId);
         const customerSnapshot = yield getCustomerSnapshot(input.customerId, input.customerSnapshot);
         const totals = buildTotals(input.items, input.transport, input.loadingUnloading, input.misc);
         return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {

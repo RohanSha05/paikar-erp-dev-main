@@ -19,7 +19,12 @@ function listLots(availableOnly) {
             include: {
                 product: true,
                 warehouse: true,
-                sourcePo: true,
+                sourcePo: {
+                    include: {
+                        // Include destination customer info if the PO is for a specific mill
+                        destinationCustomer: true
+                    }
+                },
                 stockMoves: {
                     orderBy: { createdAt: 'desc' }
                 }
