@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
 const salesItemSchema = z.object({
-  lotId: z.string().uuid(),
+  lotId: z.string().min(1),
   productType: z.string().min(1),
-  productId: z.string().uuid().optional(),
+  productId: z.string().min(1).optional(),
   qtyKg: z.number().positive(),
   rateBasis: z.enum(['perKg', 'perMon']),
   rateValue: z.number().positive(),
-  bagCount : z.number().positive()
+  bagCount : z.number().min(0)
 });
 
 const customerSnapshotSchema = z.object({
@@ -21,7 +21,7 @@ const customerSnapshotSchema = z.object({
 
 export const createSalesOrderSchema = z.object({
   body: z.object({
-    customerId: z.string().uuid(),
+    customerId: z.string().min(1),
     customerSnapshot: customerSnapshotSchema.optional(),
     transport: z.number().min(0).default(0),
     loadingUnloading: z.number().min(0).default(0),
@@ -31,11 +31,24 @@ export const createSalesOrderSchema = z.object({
   })
 });
 
-export const updateSalesOrderSchema = createSalesOrderSchema;
+export const updateSalesOrderSchema = z.object({
+  params: z.object({
+    id: z.string().min(1)
+  }),
+  body: z.object({
+    customerId: z.string().min(1),
+    customerSnapshot: customerSnapshotSchema.optional(),
+    transport: z.number().min(0).default(0),
+    loadingUnloading: z.number().min(0).default(0),
+    misc: z.number().min(0).default(0),
+    remarks: z.string().optional(),
+    items: z.array(salesItemSchema).min(1)
+  })
+});
 
 export const confirmSalesOrderParamsSchema = z.object({
   params: z.object({
-    id: z.string().uuid()
+    id: z.string().min(1)
   })
 });
 

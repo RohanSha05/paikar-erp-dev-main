@@ -21,6 +21,24 @@ function ratePerKg(rateBasis: 'perKg' | 'perMon', rateValue: number) {
   return rateBasis === 'perKg' ? rateValue : rateValue / 40;
 }
 
+async function validateLotsForCustomer(items: CreateSalesOrderInput['items'], customerId: string) {
+  const lotIds = items.map((item) => item.lotId);
+  const lots = await prisma.lot.findMany({
+    where: { id: { in: lotIds } },
+    include: { sourcePo: { include: { destinationCustomer: true } } }
+  });
+
+  for (const lot of lots) {
+    if (lot.sourcePo?.destinationCustomerId && lot.sourcePo.destinationCustomerId !== customerId) {
+      const sourcePo = lot.sourcePo;
+      throw new HttpError(
+        400,
+        `এই lot "${lot.label || lot.id}" ${sourcePo.destinationCustomer?.name || "নির্দিষ্ট customer"}-এর জন্য বরাদ্দ। এটি শুধু ওই customer-এর কাছেই বিক্রি করা যাবে।`
+      );
+    }
+  }
+}
+
 async function getCustomerSnapshot(customerId: string, snapshot?: CreateSalesOrderInput['customerSnapshot']) {
   if (snapshot) {
     return snapshot;
@@ -106,6 +124,9 @@ export async function createSalesOrderDraft(input: CreateSalesOrderInput, userId
     throw new HttpError(404, 'Customer not found');
   }
 
+  // Validate that lots are available for this customer
+  await validateLotsForCustomer(input.items, input.customerId);
+
   const customerSnapshot = await getCustomerSnapshot(input.customerId, input.customerSnapshot);
   const totals = buildTotals(input.items, input.transport, input.loadingUnloading, input.misc);
 
@@ -165,6 +186,9 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
   if (!customer) {
     throw new HttpError(404, 'Customer not found');
   }
+
+  // Validate that lots are available for this customer
+  await validateLotsForCustomer(input.items, input.customerId);
 
   const customerSnapshot = await getCustomerSnapshot(input.customerId, input.customerSnapshot);
   const totals = buildTotals(input.items, input.transport, input.loadingUnloading, input.misc);

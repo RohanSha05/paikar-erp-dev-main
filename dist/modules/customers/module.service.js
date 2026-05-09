@@ -25,7 +25,18 @@ function listCustomers() {
 }
 function createCustomer(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        const customer = yield prisma_1.prisma.customer.create({ data: input });
+        const customer = yield prisma_1.prisma.customer.create({
+            data: {
+                name: input.name,
+                district: input.district,
+                market: input.market,
+                phone: input.phone,
+                address: input.address,
+                type: input.type || 'other',
+                nidNumber: input.nidNumber,
+                emergencyPhone: input.emergencyPhone,
+            },
+        });
         yield (0, party_account_1.ensurePartyAccount)({
             kind: 'customer',
             refId: customer.id,
@@ -37,13 +48,23 @@ function createCustomer(input) {
 }
 function updateCustomer(id, input) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const existingCustomer = yield prisma_1.prisma.customer.findUnique({ where: { id } });
         if (!existingCustomer) {
             throw new httpError_1.HttpError(404, 'Customer not found');
         }
         const updatedCustomer = yield prisma_1.prisma.customer.update({
             where: { id },
-            data: input
+            data: {
+                name: (_a = input.name) !== null && _a !== void 0 ? _a : existingCustomer.name,
+                district: (_b = input.district) !== null && _b !== void 0 ? _b : existingCustomer.district,
+                market: (_c = input.market) !== null && _c !== void 0 ? _c : existingCustomer.market,
+                phone: (_d = input.phone) !== null && _d !== void 0 ? _d : existingCustomer.phone,
+                address: (_e = input.address) !== null && _e !== void 0 ? _e : existingCustomer.address,
+                type: (_f = input.type) !== null && _f !== void 0 ? _f : existingCustomer.type,
+                nidNumber: (_g = input.nidNumber) !== null && _g !== void 0 ? _g : existingCustomer.nidNumber,
+                emergencyPhone: (_h = input.emergencyPhone) !== null && _h !== void 0 ? _h : existingCustomer.emergencyPhone,
+            },
         });
         yield (0, party_account_1.ensurePartyAccount)({
             kind: 'customer',

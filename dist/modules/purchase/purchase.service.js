@@ -20,8 +20,13 @@ const httpError_1 = require("../../common/httpError");
 const party_account_1 = require("../accounting/party-account");
 const sequence_id_1 = require("../../common/utils/sequence-id");
 const KG_PER_MON = 40;
-function ratePerKg(rateBasis, rateValue) {
-    return rateBasis === 'perKg' ? rateValue : rateValue / KG_PER_MON;
+function ratePerKg(rateBasis, rateValue, bagCount = 0, stockKg = 0) {
+    if (rateBasis === 'perKg')
+        return rateValue;
+    if (rateBasis === 'perMon')
+        return rateValue / KG_PER_MON;
+    // perBag: derive effective ratePerKg from total bag cost
+    return stockKg > 0 ? (bagCount * rateValue) / stockKg : 0;
 }
 function lotNo(tx) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -44,32 +49,30 @@ function poNo() {
     });
 }
 function buildLotLabel(params) {
-	const clean = (v) =>
-		v
-			.trim()
-			.replace(/\s+/g, "") // remove spaces
-			.replace(/[^\p{L}\p{N}]/gu, ""); // keep ALL unicode letters + numbers
-	const formatLotSeq = (lotNo) => {
-		// extract last numeric part safely → LOT-005 → 005
-		const match = lotNo.match(/(\d+)$/);
-		return match ? match[1].padStart(3, "0") : lotNo;
-	};
-	const datePart =
-		`${String(params.date.getDate()).padStart(2, "0")}` +
-		`${String(params.date.getMonth() + 1).padStart(2, "0")}` +
-		`${params.date.getFullYear()}`;
-	const KG_PER_MON = 40;
-	const mon = params.weightKg / KG_PER_MON;
-	const monFormatted = mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
-	return [
-		`LOT-${formatLotSeq(params.lotNo)}`,
-		clean(params.sellerName).toUpperCase(),
-		datePart,
-		clean(params.category),
-		clean(params.productName),
-		monFormatted,
-		`${params.weightKg}KG`,
-	].join("-");
+    const clean = (v) => v
+        .trim()
+        .replace(/\s+/g, '')
+        .replace(/[^\p{L}\p{N}\p{M}]/gu, '');
+    const formatLotSeq = (lotNo) => {
+        // extract last numeric part safely → LOT-005 → 005
+        const match = lotNo.match(/(\d+)$/);
+        return match ? match[1].padStart(3, '0') : lotNo;
+    };
+    const datePart = `${String(params.date.getDate()).padStart(2, '0')}` +
+        `${String(params.date.getMonth() + 1).padStart(2, '0')}` +
+        `${params.date.getFullYear()}`;
+    const KG_PER_MON = 40;
+    const mon = params.weightKg / KG_PER_MON;
+    const monFormatted = mon % 1 === 0 ? `${mon}MON` : `${mon.toFixed(2)}MON`;
+    return [
+        `LOT-${formatLotSeq(params.lotNo)}`,
+        clean(params.sellerName).toUpperCase(),
+        datePart,
+        clean(params.category),
+        clean(params.productName),
+        monFormatted,
+        `${params.weightKg}KG`,
+    ].join('-');
 }
 function resolveItemDisplayName(item, productName) {
     var _a, _b;
@@ -89,9 +92,16 @@ function computePurchaseTotals(order) {
         const actualKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.actualKgPerBag);
         const accountingKg = bags * numberValue(item === null || item === void 0 ? void 0 : item.accountingKgPerBag);
         const stockKg = (item === null || item === void 0 ? void 0 : item.weightPolicy) === 'actual' ? actualKg : accountingKg;
-        const lineRatePerKg = ratePerKg(item === null || item === void 0 ? void 0 : item.rateBasis, numberValue(item === null || item === void 0 ? void 0 : item.rateValue));
+        let lineBase;
+        if ((item === null || item === void 0 ? void 0 : item.rateBasis) === 'perBag') {
+            lineBase = bags * numberValue(item === null || item === void 0 ? void 0 : item.rateValue);
+        }
+        else {
+            const lineRatePerKg = ratePerKg(item === null || item === void 0 ? void 0 : item.rateBasis, numberValue(item === null || item === void 0 ? void 0 : item.rateValue));
+            lineBase = stockKg * lineRatePerKg;
+        }
+        basePurchase += lineBase;
         totalBags += bags;
-        basePurchase += stockKg * lineRatePerKg;
     }
     const bagCostMode = (order === null || order === void 0 ? void 0 : order.bagCostMode) || 'paid';
     const bagCostPerBag = numberValue(order === null || order === void 0 ? void 0 : order.bagCostPerBag);
@@ -166,8 +176,19 @@ function postPurchaseAdvance(tx, po) {
             type: 'party',
         });
         const sellerAccountRef = yield resolveVoucherAccountRef(tx, sellerAccount.code);
-        const instrumentKey = String(po.advanceInstrumentId || 'AC-CASH').trim();
-        const instrumentAccountRef = yield resolveVoucherAccountRef(tx, instrumentKey);
+        const instrumentKey = String(po.advanceInstrumentId || '').trim();
+        const instrumentAccountRef = instrumentKey
+            ? yield resolveVoucherAccountRef(tx, instrumentKey)
+            : yield tx.account.upsert({
+                where: { code: 'AC-CASH' },
+                update: {},
+                create: {
+                    code: 'AC-CASH',
+                    name: 'Cash',
+                    type: 'cash',
+                    active: true,
+                },
+            });
         const voucher = yield tx.voucher.create({
             data: {
                 voucherNo: yield voucherNo(tx),
@@ -426,14 +447,11 @@ function approvePurchaseOrder(id) {
                 throw new httpError_1.HttpError(400, 'Only draft PO can be approved');
             if (!po.items.length)
                 throw new httpError_1.HttpError(400, 'PO has no items');
-            const transportMode = String(po.transportMode || "").toLowerCase();
-						const isOwnTruck = transportMode === "owntruck";
-						if (isOwnTruck && !po.driverId) {
-							throw new httpError_1.HttpError(
-								400,
-								"Driver is required for OWN_TRUCK",
-							);
-						}
+            const transportMode = String(po.transportMode || '').toLowerCase();
+            const isOwnTruck = transportMode === 'owntruck';
+            if (isOwnTruck && !po.driverId) {
+                throw new httpError_1.HttpError(400, 'Driver is required for OWN_TRUCK');
+            }
             let totalBags = 0;
             let basePurchase = 0;
             let totalStockKg = 0;
@@ -455,8 +473,16 @@ function approvePurchaseOrder(id) {
                 if (stockKg <= 0) {
                     throw new httpError_1.HttpError(400, `Invalid stock quantity for product ${item.productId}: calculated as ${stockKg} kg`);
                 }
-                const rpk = ratePerKg(item.rateBasis, Number(item.rateValue));
-                const lineBase = stockKg * rpk;
+                let lineBase;
+                let rpk;
+                if (item.rateBasis === 'perBag') {
+                    lineBase = item.bagCount * Number(item.rateValue); // bags × rate
+                    rpk = stockKg > 0 ? lineBase / stockKg : 0; // effective rate for avgCost
+                }
+                else {
+                    rpk = ratePerKg(item.rateBasis, Number(item.rateValue));
+                    lineBase = stockKg * rpk;
+                }
                 totalBags += item.bagCount;
                 totalStockKg += stockKg;
                 basePurchase += lineBase;
@@ -472,8 +498,9 @@ function approvePurchaseOrder(id) {
                 });
                 const nextLotNo = yield lotNo(tx);
                 const sellerName = po.seller.name;
-								const KG_PER_MON = 40;
-								const monValue = stockKg / KG_PER_MON;
+                const KG_PER_MON = 40;
+                const monValue = stockKg / KG_PER_MON;
+                console.log('PRODUCT DEBUG:', product);
                 const lot = yield tx.lot.create({
                     data: {
                         lotNo: nextLotNo,
@@ -484,6 +511,8 @@ function approvePurchaseOrder(id) {
                             category: (product === null || product === void 0 ? void 0 : product.category) || 'GEN',
                             productName: (product === null || product === void 0 ? void 0 : product.name) || 'UNKNOWN',
                             weightKg: stockKg,
+                            rateBasis: item.rateBasis, // ✅ ADD
+                            rateValue: Number(item.rateValue),
                         }),
                         productId: item.productId,
                         warehouseId: po.warehouseId,
@@ -548,14 +577,14 @@ function approvePurchaseOrder(id) {
                 }
             });
             const rows = [];
-						// 1. Inventory (FULL COST)
-						rows.push({
-							voucherId: voucher.id,
-							accountId: inventoryAccountRef.id,
-							dr: new client_1.Prisma.Decimal(totalCost),
-							cr: new client_1.Prisma.Decimal(0),
-							memo: `PO ${po.poNo} inventory`,
-						});
+            // 1. Inventory (FULL COST)
+            rows.push({
+                voucherId: voucher.id,
+                accountId: inventoryAccountRef.id,
+                dr: new client_1.Prisma.Decimal(totalCost),
+                cr: new client_1.Prisma.Decimal(0),
+                memo: `PO ${po.poNo} inventory`,
+            });
             // 2. Seller (ONLY GOODS)
             rows.push({
                 voucherId: voucher.id,
@@ -590,12 +619,12 @@ function approvePurchaseOrder(id) {
                 });
                 const expenseRef = yield resolveVoucherAccountRef(tx, expenseAccount.code);
                 rows.push({
-									voucherId: voucher.id,
-									accountId: expenseRef.id,
-									dr: new client_1.Prisma.Decimal(0),
-									cr: new client_1.Prisma.Decimal(otherCost),
-									memo: `PO ${po.poNo} extra cost`,
-								});
+                    voucherId: voucher.id,
+                    accountId: expenseRef.id,
+                    dr: new client_1.Prisma.Decimal(0),
+                    cr: new client_1.Prisma.Decimal(otherCost),
+                    memo: `PO ${po.poNo} extra cost`,
+                });
             }
             // FINAL INSERT
             yield tx.voucherRow.createMany({

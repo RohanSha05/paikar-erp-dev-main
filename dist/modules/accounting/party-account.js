@@ -11,7 +11,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.partyAccountCode = partyAccountCode;
 exports.ensurePartyAccount = ensurePartyAccount;
-const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 function normalizeToken(value) {
     return value
@@ -25,33 +24,26 @@ function partyAccountCode(kind, refId) {
     const safeRef = normalizeToken(refId || 'unknown') || 'UNKNOWN';
     return `PTY-${safeKind}-${safeRef}`.slice(0, 64);
 }
-function ensurePartyAccount(input) {
+function ensurePartyAccount(params) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
-        const code = (input.code || partyAccountCode(input.kind, input.refId)).trim();
-        const kind = input.kind.trim().toLowerCase();
-        const refId = input.refId.trim();
-        const name = input.name.trim();
-        const existing = yield prisma_1.prisma.account.findFirst({
-            where: {
-                OR: [
-                    { code },
-                    { partyKind: kind, partyRefId: refId },
-                ],
-            },
-        });
-        if (existing) {
-            return existing;
-        }
-        return prisma_1.prisma.account.create({
-            data: {
-                code,
-                name,
-                type: ((_a = input.type) === null || _a === void 0 ? void 0 : _a.trim()) || 'party',
+        const kind = params.kind.trim().toLowerCase();
+        const refId = params.refId.trim();
+        const code = params.code || `AC-${kind.toUpperCase()}-${refId}`.slice(0, 64);
+        return prisma_1.prisma.account.upsert({
+            where: { code },
+            update: {
+                name: params.name.trim(),
+                type: params.type,
                 partyKind: kind,
                 partyRefId: refId,
-                bankInfo: ((_b = input.bankInfo) === null || _b === void 0 ? void 0 : _b.trim()) || undefined,
-                opening: new client_1.Prisma.Decimal(0),
+                active: true,
+            },
+            create: {
+                code,
+                name: params.name.trim(),
+                type: params.type,
+                partyKind: kind,
+                partyRefId: refId,
                 active: true,
             },
         });

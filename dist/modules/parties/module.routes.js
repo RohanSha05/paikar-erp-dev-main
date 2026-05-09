@@ -42,5 +42,4 @@ const router = (0, express_1.Router)();
 router.get('/', auth_1.requireAuth, controller.list);
 router.post('/', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN', 'OPERATOR']), (0, validate_1.validate)(module_validator_1.createPartySchema), controller.create);
 router.patch('/:id', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN', 'OPERATOR']), (0, validate_1.validate)(module_validator_1.updatePartySchema), controller.update);
-router.delete('/:id', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN', 'OPERATOR']), (0, validate_1.validate)(module_validator_1.deletePartySchema), controller.remove);
 exports.default = router;

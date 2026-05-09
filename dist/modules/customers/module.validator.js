@@ -10,7 +10,9 @@ exports.createCustomerSchema = zod_1.z.object({
         district: zod_1.z.string().max(120).optional(),
         market: zod_1.z.string().max(120).optional(),
         phone: zod_1.z.string().max(40).optional(),
-        type: customerTypeSchema.optional()
+        type: customerTypeSchema.optional(),
+        nidNumber: zod_1.z.string().max(50).optional(),
+        emergencyPhone: zod_1.z.string().max(40).optional()
     })
 });
 exports.updateCustomerSchema = zod_1.z.object({
@@ -24,7 +26,9 @@ exports.updateCustomerSchema = zod_1.z.object({
         district: zod_1.z.string().max(120).optional(),
         market: zod_1.z.string().max(120).optional(),
         phone: zod_1.z.string().max(40).optional(),
-        type: customerTypeSchema.optional()
+        type: customerTypeSchema.optional(),
+        nidNumber: zod_1.z.string().max(50).optional(),
+        emergencyPhone: zod_1.z.string().max(40).optional()
     })
         .refine((data) => Object.keys(data).length > 0, {
         message: 'At least one field is required'

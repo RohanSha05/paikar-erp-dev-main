@@ -9,6 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.upsertPartyAccountOpening = upsertPartyAccountOpening;
 exports.getReportMeta = getReportMeta;
 exports.listAccounts = listAccounts;
 exports.createAccount = createAccount;
@@ -16,6 +17,21 @@ exports.getDaybook = getDaybook;
 exports.getLedger = getLedger;
 exports.getTrialBalance = getTrialBalance;
 exports.getExpenseSummary = getExpenseSummary;
+// Upsert Party Account Opening for API route
+// Accepts { partyKind, partyRefId, name, amount } from frontend and maps to CreateAccountInput
+function upsertPartyAccountOpening(payload) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return createAccount({
+            name: payload.name,
+            type: 'party',
+            partyKind: payload.partyKind,
+            partyRefId: payload.partyRefId,
+            openingDr: payload.paona,
+            openingCr: payload.dena,
+            active: true,
+        });
+    });
+}
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
@@ -52,9 +68,38 @@ function mapAccount(account) {
         active: account.active,
         partyKind: account.partyKind,
         partyRefId: account.partyRefId,
-        opening: toNumber(account.opening),
+        // opening: toNumber(account.opening),
     };
 }
+function getOpeningFromVouchers(accountId, beforeDate) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const rows = yield prisma_1.prisma.voucherRow.findMany({
+            where: Object.assign({ accountId }, (beforeDate && {
+                voucher: { vdate: { lt: beforeDate } },
+            })),
+            select: { dr: true, cr: true },
+        });
+        return rows.reduce((sum, r) => sum + Number(r.dr) - Number(r.cr), 0);
+    });
+}
+// async function getOpeningFromVouchers(accountId: string, beforeDate?: Date) {
+// 	 if (!beforeDate) return 0;
+// 	const rows = await prisma.voucherRow.findMany({
+// 		where: {
+// 			accountId,
+// 			...(beforeDate && {
+// 				voucher: {
+// 					vdate: { lt: beforeDate },
+// 				},
+// 			}),
+// 		},
+// 		select: { dr: true, cr: true },
+// 	});
+// 	return rows.reduce(
+// 		(sum, r) => sum + Number(r.dr) - Number(r.cr),
+// 		0
+// 	);
+// }
 function getReportMeta() {
     return __awaiter(this, void 0, void 0, function* () {
         const latestVoucher = yield prisma_1.prisma.voucher.findFirst({
@@ -105,30 +150,249 @@ function listAccounts(filterByType) {
             where: Object.assign({ active: true }, (filterByType ? { type: filterByType } : {})),
             orderBy: [{ type: 'asc' }, { name: 'asc' }],
         });
-        return accounts.map(mapAccount);
+        const result = yield Promise.all(accounts.map((acc) => __awaiter(this, void 0, void 0, function* () {
+            const opening = yield getOpeningFromVouchers(acc.id);
+            const openingDr = opening > 0 ? opening : 0;
+            const openingCr = opening < 0 ? Math.abs(opening) : 0;
+            return Object.assign(Object.assign({}, mapAccount(acc)), { opening,
+                openingDr,
+                openingCr });
+        })));
+        return result;
+    });
+}
+// export async function createAccount(input: CreateAccountInput): Promise<AccountDto> {
+// 	const code = (input.code || (await generateAccountCode(input.type))).trim().toUpperCase();
+// 	const exists = await prisma.account.findUnique({ where: { code } });
+// 	if (exists) {
+// 		throw new HttpError(409, 'Account code already exists');
+// 	}
+// 	const account = await prisma.account.create({
+// 		data: {
+// 			code,
+// 			name: input.name.trim(),
+// 			type: input.type.trim(),
+// 			opening: input.opening !== undefined ? new Prisma.Decimal(input.opening) : undefined,
+// 			active: input.active !== false,
+// 			partyKind: input.partyKind?.trim() || undefined,
+// 			partyRefId: input.partyRefId?.trim() || undefined,
+// 			bankInfo: input.bankInfo?.trim() || undefined,
+// 		},
+// 	});
+// 	return mapAccount(account);
+// }
+function partyBalanceSide(partyKind) {
+    const kind = partyKind === null || partyKind === void 0 ? void 0 : partyKind.trim().toLowerCase();
+    switch (kind) {
+        case "customer":
+        case "driver":
+            return "debit"; // paona
+        case "seller":
+            return "credit"; // dena
+        case "investor":
+            return "credit"; // capital
+        default:
+            return "debit";
+    }
+}
+function coerceAmount(value) {
+    const amount = Number(value !== null && value !== void 0 ? value : 0);
+    return Number.isFinite(amount) ? amount : 0;
+}
+function defaultOpeningSide(type, partyKind) {
+    const normalizedType = normalizeType(type);
+    if (normalizedType === 'party') {
+        return partyBalanceSide(partyKind) === 'credit' ? 'cr' : 'dr';
+    }
+    if (['cash', 'bank', 'expense', 'transport'].includes(normalizedType)) {
+        return 'dr';
+    }
+    return 'cr';
+}
+function normalizeOpening(input) {
+    const openingDr = coerceAmount(input.openingDr);
+    const openingCr = coerceAmount(input.openingCr);
+    if (openingDr > 0 && openingCr > 0) {
+        throw new httpError_1.HttpError(400, 'Only one opening balance side is allowed');
+    }
+    if (openingDr > 0) {
+        return { amount: openingDr, side: 'dr' };
+    }
+    if (openingCr > 0) {
+        return { amount: openingCr, side: 'cr' };
+    }
+    const opening = coerceAmount(input.opening);
+    if (opening === 0) {
+        return null;
+    }
+    const side = opening < 0
+        ? (defaultOpeningSide(input.type, input.partyKind) === 'dr' ? 'cr' : 'dr')
+        : defaultOpeningSide(input.type, input.partyKind);
+    return {
+        amount: Math.abs(opening),
+        side,
+    };
+}
+function deleteOpeningVouchers(tx, accountId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Find all vouchers that have this account with opening balance narration
+        const vouchersToDelete = yield tx.voucher.findMany({
+            where: {
+                narration: {
+                    startsWith: 'Opening balance —',
+                },
+                rows: {
+                    some: {
+                        accountId,
+                    },
+                },
+            },
+            select: { id: true },
+        });
+        // Delete rows for these vouchers
+        if (vouchersToDelete.length > 0) {
+            const voucherIds = vouchersToDelete.map((v) => v.id);
+            yield tx.voucherRow.deleteMany({
+                where: {
+                    voucherId: {
+                        in: voucherIds,
+                    },
+                },
+            });
+            // Delete the vouchers
+            yield tx.voucher.deleteMany({
+                where: {
+                    id: {
+                        in: voucherIds,
+                    },
+                },
+            });
+        }
+    });
+}
+function postOpeningVoucher(tx, account, opening) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const equityAccount = yield tx.account.upsert({
+            where: { code: 'AC-OPENING-EQUITY' },
+            update: {},
+            create: {
+                code: 'AC-OPENING-EQUITY',
+                name: 'Opening Balance Equity',
+                type: 'equity',
+                active: true,
+            },
+        });
+        const voucherNo = yield (0, sequence_id_1.nextDailySequenceIdForDelegate)(tx.voucher, 'voucherNo', 'VCH');
+        const accountRow = opening.side === 'dr'
+            ? {
+                accountId: account.id,
+                dr: new client_1.Prisma.Decimal(opening.amount),
+                cr: new client_1.Prisma.Decimal(0),
+                memo: 'Opening balance',
+            }
+            : {
+                accountId: account.id,
+                dr: new client_1.Prisma.Decimal(0),
+                cr: new client_1.Prisma.Decimal(opening.amount),
+                memo: 'Opening balance',
+            };
+        const equityRow = opening.side === 'dr'
+            ? {
+                accountId: equityAccount.id,
+                dr: new client_1.Prisma.Decimal(0),
+                cr: new client_1.Prisma.Decimal(opening.amount),
+                memo: 'Opening balance',
+            }
+            : {
+                accountId: equityAccount.id,
+                dr: new client_1.Prisma.Decimal(opening.amount),
+                cr: new client_1.Prisma.Decimal(0),
+                memo: 'Opening balance',
+            };
+        console.log('🔍 Creating opening balance voucher:', {
+            accountName: account.name,
+            amount: opening.amount,
+            side: opening.side,
+            rows: [
+                { dr: accountRow.dr, cr: accountRow.cr },
+                { dr: equityRow.dr, cr: equityRow.cr },
+            ],
+        });
+        yield tx.voucher.create({
+            data: {
+                voucherNo,
+                vtype: 'journal',
+                vdate: new Date(),
+                narration: `Opening balance — ${account.name}`,
+                rows: {
+                    create: [accountRow, equityRow],
+                },
+            },
+        });
     });
 }
 function createAccount(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b, _c;
+        var _a, _b;
         const code = (input.code || (yield generateAccountCode(input.type))).trim().toUpperCase();
-        const exists = yield prisma_1.prisma.account.findUnique({ where: { code } });
-        if (exists) {
-            throw new httpError_1.HttpError(409, 'Account code already exists');
+        const partyKind = (_a = input.partyKind) === null || _a === void 0 ? void 0 : _a.trim().toLowerCase();
+        const normalizedType = normalizeType(input.type);
+        const opening = normalizeOpening(input);
+        const name = input.name.trim();
+        const partyRefId = (_b = input.partyRefId) === null || _b === void 0 ? void 0 : _b.trim();
+        if (normalizedType === 'party' && partyKind && partyRefId) {
+            const existing = yield prisma_1.prisma.account.findFirst({
+                where: {
+                    type: 'party',
+                    partyKind: partyKind,
+                    partyRefId,
+                },
+            });
+            if (existing) {
+                return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+                    var _a;
+                    const account = yield tx.account.update({
+                        where: { id: existing.id },
+                        data: {
+                            name,
+                            type: normalizedType,
+                            active: input.active !== false,
+                            partyKind,
+                            partyRefId,
+                            bankInfo: ((_a = input.bankInfo) === null || _a === void 0 ? void 0 : _a.trim()) || undefined,
+                        },
+                    });
+                    if (opening) {
+                        // Delete old opening vouchers before posting new one
+                        yield deleteOpeningVouchers(tx, existing.id);
+                        yield postOpeningVoucher(tx, account, opening);
+                    }
+                    return mapAccount(account);
+                }));
+            }
         }
-        const account = yield prisma_1.prisma.account.create({
-            data: {
-                code,
-                name: input.name.trim(),
-                type: input.type.trim(),
-                opening: input.opening !== undefined ? new client_1.Prisma.Decimal(input.opening) : undefined,
-                active: input.active !== false,
-                partyKind: ((_a = input.partyKind) === null || _a === void 0 ? void 0 : _a.trim()) || undefined,
-                partyRefId: ((_b = input.partyRefId) === null || _b === void 0 ? void 0 : _b.trim()) || undefined,
-                bankInfo: ((_c = input.bankInfo) === null || _c === void 0 ? void 0 : _c.trim()) || undefined,
-            },
-        });
-        return mapAccount(account);
+        const exists = yield prisma_1.prisma.account.findUnique({ where: { code } });
+        if (exists)
+            throw new httpError_1.HttpError(409, 'Account code already exists');
+        return prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+            var _a;
+            const account = yield tx.account.create({
+                data: {
+                    code,
+                    name,
+                    type: normalizedType,
+                    opening: new client_1.Prisma.Decimal(0),
+                    active: input.active !== false,
+                    partyKind: partyKind || undefined,
+                    partyRefId: partyRefId || undefined,
+                    bankInfo: ((_a = input.bankInfo) === null || _a === void 0 ? void 0 : _a.trim()) || undefined,
+                },
+            });
+            if (opening) {
+                yield postOpeningVoucher(tx, account, opening);
+            }
+            return mapAccount(account);
+        }));
     });
 }
 function getDaybook(dateISO) {
@@ -172,19 +436,9 @@ function getLedger(accountId, from, to) {
         }
         const openingDate = from ? new Date(`${from}T00:00:00Z`) : undefined;
         const closingDate = to ? new Date(`${to}T23:59:59Z`) : undefined;
-        const openingVouchers = openingDate
-            ? yield prisma_1.prisma.voucher.findMany({
-                where: { vdate: { lt: openingDate } },
-                include: {
-                    rows: {
-                        where: { accountId },
-                    },
-                },
-            })
-            : [];
-        const opening = toNumber(account.opening) + openingVouchers.reduce((sum, voucher) => {
-            return sum + voucher.rows.reduce((rowSum, row) => rowSum + toNumber(row.dr) - toNumber(row.cr), 0);
-        }, 0);
+        // Only calculate opening if a from date is provided
+        // If no from date, opening is implicit in the vouchers query
+        const opening = openingDate ? yield getOpeningFromVouchers(accountId, openingDate) : 0;
         const vouchers = yield prisma_1.prisma.voucher.findMany({
             where: Object.assign({}, (openingDate || closingDate
                 ? {
@@ -202,23 +456,24 @@ function getLedger(accountId, from, to) {
             ],
         });
         let balance = opening;
-        const rows = vouchers.flatMap((voucher) => voucher.rows.map((row) => {
-            balance += toNumber(row.dr) - toNumber(row.cr);
-            return {
-                vId: voucher.voucherNo,
-                date: voucher.vdate.toISOString().slice(0, 10),
-                memo: row.memo || voucher.narration || undefined,
-                dr: toNumber(row.dr),
-                cr: toNumber(row.cr),
-                balance,
-                createdAt: row.createdAt.toISOString(),
-            };
-        }));
+        const rows = vouchers.flatMap((voucher) => voucher.rows.length ?
+            voucher.rows.map((row) => {
+                balance += toNumber(row.dr) - toNumber(row.cr);
+                return {
+                    vId: voucher.voucherNo,
+                    date: voucher.vdate.toISOString().slice(0, 10),
+                    memo: row.memo || voucher.narration || undefined,
+                    dr: toNumber(row.dr),
+                    cr: toNumber(row.cr),
+                    balance,
+                    createdAt: row.createdAt.toISOString(),
+                };
+            }) : []);
         return {
             account: mapAccount(account),
             opening,
             closing: balance,
-            rows: rows.reverse(),
+            rows: rows,
         };
     });
 }
@@ -232,7 +487,7 @@ function getTrialBalance() {
             include: { rows: true },
             orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
         });
-        const rows = accounts.map((account) => {
+        const rows = yield Promise.all(accounts.map((account) => __awaiter(this, void 0, void 0, function* () {
             let dr = 0;
             let cr = 0;
             for (const voucher of vouchers) {
@@ -241,19 +496,19 @@ function getTrialBalance() {
                     cr += toNumber(row.cr);
                 }
             }
-            const opening = toNumber(account.opening);
-            const balance = opening + dr - cr;
+            const opening = yield getOpeningFromVouchers(account.id);
+            const balance = dr - cr;
             return {
                 id: account.id,
                 code: account.code,
                 name: account.name,
                 type: account.type,
-                opening,
+                opening: 0,
                 dr,
                 cr,
                 balance,
             };
-        });
+        })));
         return {
             rows,
             totals: {

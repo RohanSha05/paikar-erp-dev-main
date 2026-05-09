@@ -24,7 +24,7 @@ const purchaseItemSchema = zod_1.z.object({
     actualKgPerBag: zod_1.z.number().nonnegative(),
     accountingKgPerBag: zod_1.z.number().nonnegative(),
     weightPolicy: zod_1.z.enum(['actual', 'accounting']),
-    rateBasis: zod_1.z.enum(['perKg', 'perMon']),
+    rateBasis: zod_1.z.enum(['perKg', 'perMon', 'perBag']),
     rateValue: zod_1.z.number().nonnegative()
 });
 exports.createPurchaseOrderDraftSchema = zod_1.z.object({

@@ -95,6 +95,7 @@ function createParty(input) {
                 refId: seller.id,
                 name: seller.name,
                 type: 'party',
+                code: `PTY-SELLER-${seller.id}`.slice(0, 64),
             });
             return {
                 id: seller.id,
@@ -120,6 +121,7 @@ function createParty(input) {
                 refId: customer.id,
                 name: customer.name,
                 type: 'party',
+                code: `PTY-CUSTOMER-${customer.id}`.slice(0, 64),
             });
             return {
                 id: customer.id,
@@ -151,6 +153,7 @@ function createParty(input) {
                 refId: driver.id,
                 name: driver.name,
                 type: 'party',
+                code: `PTY-DRIVER-${driver.id}`.slice(0, 64),
             });
             return {
                 id: driver.id,
@@ -182,6 +185,7 @@ function createParty(input) {
                 refId: investor.id,
                 name: investor.name,
                 type: 'party',
+                code: `PTY-INVESTOR-${investor.id}`.slice(0, 64),
             });
             return {
                 id: investor.id,
@@ -242,6 +246,7 @@ function createParty(input) {
  */
 function listParties(kind) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
         const type = kind ? normalizePartyType(kind) : undefined;
         const includeSellers = !type || type === 'SELLER';
         const includeCustomers = !type || type === 'CUSTOMER';
@@ -261,14 +266,21 @@ function listParties(kind) {
                 : Promise.resolve([]),
             prisma_1.prisma.account.findMany({
                 where: { type: 'party' },
-                select: { id: true, partyKind: true, partyRefId: true },
+                select: { id: true, partyKind: true, partyRefId: true, opening: true, },
             }),
         ]);
         const accountByRef = new Map();
         for (const account of linkedAccounts) {
             const k = `${(account.partyKind || '').toLowerCase()}:${account.partyRefId || ''}`;
             if (account.partyKind && account.partyRefId && !accountByRef.has(k)) {
-                accountByRef.set(k, account.id);
+                accountByRef.set(k, {
+                    id: account.id,
+                    opening: account.opening ? Number(account.opening) : 0,
+                });
+                // for a specific seller:
+                sellers.forEach(s => {
+                    const key = `seller:${s.id}`;
+                });
             }
         }
         const rows = [];
@@ -279,7 +291,8 @@ function listParties(kind) {
                 name: seller.name,
                 type: 'seller',
                 active: true,
-                accountId: accountByRef.get(`seller:${seller.id}`),
+                accountId: (_a = accountByRef.get(`seller:${seller.id}`)) === null || _a === void 0 ? void 0 : _a.id,
+                opening: (_c = (_b = accountByRef.get(`seller:${seller.id}`)) === null || _b === void 0 ? void 0 : _b.opening) !== null && _c !== void 0 ? _c : 0,
             });
         }
         for (const customer of customers) {
@@ -289,7 +302,8 @@ function listParties(kind) {
                 name: customer.name,
                 type: 'customer',
                 active: true,
-                accountId: accountByRef.get(`customer:${customer.id}`),
+                accountId: (_d = accountByRef.get(`customer:${customer.id}`)) === null || _d === void 0 ? void 0 : _d.id,
+                opening: (_f = (_e = accountByRef.get(`customer:${customer.id}`)) === null || _e === void 0 ? void 0 : _e.opening) !== null && _f !== void 0 ? _f : 0,
             });
         }
         for (const driver of drivers) {
@@ -299,7 +313,8 @@ function listParties(kind) {
                 name: driver.name,
                 type: 'driver',
                 active: driver.active,
-                accountId: accountByRef.get(`driver:${driver.id}`),
+                accountId: (_g = accountByRef.get(`driver:${driver.id}`)) === null || _g === void 0 ? void 0 : _g.id,
+                opening: (_j = (_h = accountByRef.get(`driver:${driver.id}`)) === null || _h === void 0 ? void 0 : _h.opening) !== null && _j !== void 0 ? _j : 0,
             });
         }
         for (const investor of investors) {
@@ -309,7 +324,8 @@ function listParties(kind) {
                 name: investor.name,
                 type: 'investor',
                 active: investor.active,
-                accountId: accountByRef.get(`investor:${investor.id}`),
+                accountId: (_k = accountByRef.get(`investor:${investor.id}`)) === null || _k === void 0 ? void 0 : _k.id,
+                opening: (_m = (_l = accountByRef.get(`investor:${investor.id}`)) === null || _l === void 0 ? void 0 : _l.opening) !== null && _m !== void 0 ? _m : 0,
             });
         }
         for (const party of parties) {
@@ -319,7 +335,8 @@ function listParties(kind) {
                 name: party.name,
                 type: party.type.toLowerCase(),
                 active: party.active,
-                accountId: accountByRef.get(`${party.type.toLowerCase()}:${party.id}`),
+                accountId: (_o = accountByRef.get(`${party.type.toLowerCase()}:${party.id}`)) === null || _o === void 0 ? void 0 : _o.id,
+                opening: (_q = (_p = accountByRef.get(`${party.type.toLowerCase()}:${party.id}`)) === null || _p === void 0 ? void 0 : _p.opening) !== null && _q !== void 0 ? _q : 0,
             });
         }
         return rows.sort((a, b) => {
@@ -506,6 +523,7 @@ function ensureRoundingAccountId() {
  */
 function createVoucher(input) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
         if (!Array.isArray(input.rows) || input.rows.length === 0) {
             throw new httpError_1.HttpError(400, 'Voucher must contain at least one row');
         }
@@ -515,6 +533,17 @@ function createVoucher(input) {
             cr: Number(row.cr || 0),
             memo: row.memo,
         }));
+        // Debug log for payment vouchers
+        if (((_a = input.narration) === null || _a === void 0 ? void 0 : _a.includes('payment')) || ((_b = input.narration) === null || _b === void 0 ? void 0 : _b.includes('receipt'))) {
+            console.log('🔍 Settlement voucher:', {
+                narration: input.narration,
+                rows: rows.map((r) => ({
+                    dr: r.dr,
+                    cr: r.cr,
+                    memo: r.memo,
+                })),
+            });
+        }
         const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
         const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
         const diff = round2(totalDr - totalCr);

@@ -141,7 +141,8 @@ function createSalesOrderDraft(input, userId) {
                         rateBasis: item.rateBasis,
                         rateValue: new client_1.Prisma.Decimal(item.rateValue),
                         ratePerKg: new client_1.Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-                        lineBase: new client_1.Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue))
+                        lineBase: new client_1.Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+                        bagCount: item.bagCount,
                     }))
                 }
             },
@@ -196,7 +197,8 @@ function updateSalesOrderDraft(id, input) {
                             rateBasis: item.rateBasis,
                             rateValue: new client_1.Prisma.Decimal(item.rateValue),
                             ratePerKg: new client_1.Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-                            lineBase: new client_1.Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue))
+                            lineBase: new client_1.Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+                            bagCount: item.bagCount
                         }))
                     }
                 },

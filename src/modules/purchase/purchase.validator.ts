@@ -7,7 +7,7 @@ const sellerSnapshotSchema = z.object({
   district: z.string().optional(),
   market: z.string().optional(),
   phone: z.string().optional()
-}).optional();
+}).optional().nullable();
 
 const destinationRefSchema = z.object({
   type: z.enum(['warehouse', 'mill']),
@@ -16,7 +16,7 @@ const destinationRefSchema = z.object({
 }).nullable().optional();
 
 const purchaseItemSchema = z.object({
-  productId: z.string().uuid(),
+  productId: z.string().min(1),
   productType: z.string().min(1).optional(),
   productName: z.string().min(1).optional(),
   id: z.string().optional(),
@@ -69,20 +69,20 @@ export const createPurchaseOrderSchema = z.object({
 
 export const updatePurchaseOrderSchema = z.object({
   params: z.object({
-    id: z.string().uuid()
+    id: z.string().min(1)
   }),
   body: createPurchaseOrderDraftSchema
 });
 
 export const getPurchaseOrderSchema = z.object({
   params: z.object({
-    id: z.string().uuid()
+    id: z.string().min(1)
   })
 });
 
 export const approvePurchaseOrderSchema = z.object({
   params: z.object({
-    id: z.string().uuid()
+    id: z.string().min(1)
   })
 });
 
