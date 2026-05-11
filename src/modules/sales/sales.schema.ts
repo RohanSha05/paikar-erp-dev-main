@@ -42,7 +42,8 @@ export const updateSalesOrderSchema = z.object({
     loadingUnloading: z.number().min(0).default(0),
     misc: z.number().min(0).default(0),
     remarks: z.string().optional(),
-    items: z.array(salesItemSchema).min(1)
+    items: z.array(salesItemSchema).min(1),
+    editPassword: z.string().min(6).optional()
   })
 });
 
@@ -50,6 +51,17 @@ export const confirmSalesOrderParamsSchema = z.object({
   params: z.object({
     id: z.string().min(1)
   })
+});
+
+export const deleteSalesOrderSchema = z.object({
+  params: z.object({
+    id: z.string().min(1)
+  }),
+  body: z
+    .object({
+      editPassword: z.string().min(6).optional()
+    })
+    .default({})
 });
 
 export type CreateSalesOrderInput = z.infer<typeof createSalesOrderSchema>['body'];

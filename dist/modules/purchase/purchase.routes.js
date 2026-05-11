@@ -44,4 +44,5 @@ router.get('/:id', auth_1.requireAuth, (0, validate_1.validate)(purchase_validat
 router.post('/', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN', 'OPERATOR']), (0, validate_1.validate)(purchase_validator_1.createPurchaseOrderSchema), controller.createDraft);
 router.patch('/:id', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN', 'OPERATOR']), (0, validate_1.validate)(purchase_validator_1.updatePurchaseOrderSchema), controller.updateDraft);
 router.post('/:id/approve', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN']), (0, validate_1.validate)(purchase_validator_1.approvePurchaseOrderSchema), controller.approve);
+router.delete('/:id', auth_1.requireAuth, (0, auth_1.requireRole)(['ADMIN']), (0, validate_1.validate)(purchase_validator_1.deletePurchaseOrderSchema), controller.deletePurchaseOrder);
 exports.default = router;

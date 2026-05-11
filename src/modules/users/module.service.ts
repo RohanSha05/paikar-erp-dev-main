@@ -78,3 +78,18 @@ export async function updateUser(id: string, input: UpdateUserInput) {
 		}
 	});
 }
+
+export async function deleteUser(id: string) {
+	// Find the oldest user — they cannot be deleted
+	const oldest = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
+	if (oldest?.id === id) {
+		throw new HttpError(403, 'The first user cannot be deleted');
+	}
+ 
+	const user = await prisma.user.findUnique({ where: { id } });
+	if (!user) {
+		throw new HttpError(404, 'User not found');
+	}
+ 
+	return prisma.user.delete({ where: { id } });
+}

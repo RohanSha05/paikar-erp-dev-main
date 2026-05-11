@@ -3,6 +3,8 @@ export type CreatePartyInput = {
   district?: string;
   market?: string;
   phone?: string;
+  paona?: number;
+  dena?: number;
 
   nidNumber?: string;
   emergencyPhone?: string;

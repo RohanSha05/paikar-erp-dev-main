@@ -11,4 +11,5 @@ router.get('/sales-orders/:id', auth_1.requireAuth, (0, validate_1.validate)(sal
 router.post('/sales-orders', auth_1.requireAuth, (0, validate_1.validate)(sales_schema_1.createSalesOrderSchema), sales_controller_1.createSalesOrderHandler);
 router.patch('/sales-orders/:id', auth_1.requireAuth, (0, validate_1.validate)(sales_schema_1.updateSalesOrderSchema), sales_controller_1.updateSalesOrderHandler);
 router.post('/sales-orders/:id/confirm', auth_1.requireAuth, (0, validate_1.validate)(sales_schema_1.confirmSalesOrderParamsSchema), sales_controller_1.confirmSalesOrderHandler);
+router.delete('/sales-orders/:id', auth_1.requireAuth, (0, validate_1.validate)(sales_schema_1.deleteSalesOrderSchema), sales_controller_1.deleteSalesOrderHandler);
 exports.default = router;

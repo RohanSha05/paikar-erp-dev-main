@@ -14,6 +14,7 @@ exports.getSalesOrderByIdHandler = getSalesOrderByIdHandler;
 exports.createSalesOrderHandler = createSalesOrderHandler;
 exports.updateSalesOrderHandler = updateSalesOrderHandler;
 exports.confirmSalesOrderHandler = confirmSalesOrderHandler;
+exports.deleteSalesOrderHandler = deleteSalesOrderHandler;
 const sales_service_1 = require("./sales.service");
 function listSalesOrdersHandler(_req, res, next) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -53,9 +54,11 @@ function createSalesOrderHandler(req, res, next) {
 }
 function updateSalesOrderHandler(req, res, next) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a;
         try {
             const body = req.body;
-            const data = yield (0, sales_service_1.updateSalesOrderDraft)(req.params.id, body);
+            const userId = (_a = req.authUser) === null || _a === void 0 ? void 0 : _a.userId;
+            const data = yield (0, sales_service_1.updateSalesOrderDraft)(req.params.id, body, userId);
             return res.json({ success: true, message: 'SO draft updated', data });
         }
         catch (error) {
@@ -71,6 +74,20 @@ function confirmSalesOrderHandler(req, res, next) {
             const userId = (_a = req.authUser) === null || _a === void 0 ? void 0 : _a.userId;
             const data = yield (0, sales_service_1.confirmSalesOrder)(id, userId);
             return res.json({ success: true, message: 'SO confirmed', data });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function deleteSalesOrderHandler(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        try {
+            const { id } = req.params;
+            const userId = (_a = req.authUser) === null || _a === void 0 ? void 0 : _a.userId;
+            const data = yield (0, sales_service_1.deleteSalesOrder)(id, req.body, userId);
+            return res.json({ success: true, message: 'SO deleted', data });
         }
         catch (error) {
             next(error);

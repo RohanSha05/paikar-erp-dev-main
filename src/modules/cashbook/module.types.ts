@@ -34,6 +34,8 @@ export interface VoucherRowInput {
   memo?: string;
 }
 
+export type VoucherStatus = 'DRAFT' | 'POSTED' | 'RECONCILED';
+
 export interface CreateVoucherInput {
   vtype: string; // 'payment', 'receipt', 'journal', 'contra'
   vdate: string; // ISO date string (YYYY-MM-DD)
@@ -41,12 +43,27 @@ export interface CreateVoucherInput {
   narration?: string;
 }
 
+export interface CreateDraftVoucherInput extends CreateVoucherInput {
+  status?: 'DRAFT';
+}
+
+export interface UpdateDraftVoucherInput extends CreateVoucherInput {}
+
 export interface VoucherDto {
   id: string;
   voucherNo: string;
   vtype: string;
   vdate: string;
   narration?: string;
+  status?: VoucherStatus;
+  postedAt?: string | null;
+  deletedAt?: string | null;
+  reversalId?: string | null;
+  auditLog?: Array<{
+    id: string;
+    action: string;
+    createdAt: string;
+  }>;
   rows: Array<{
     id: string;
     accountId: string;
@@ -56,6 +73,7 @@ export interface VoucherDto {
     memo?: string;
   }>;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface ListAccountsResponse {

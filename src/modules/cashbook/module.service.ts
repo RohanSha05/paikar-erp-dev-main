@@ -6,10 +6,12 @@ import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import type {
   AccountDto,
   CreatePartyInput,
+  CreateDraftVoucherInput,
   PartyDto,
   VoucherDto,
   CreateVoucherInput,
   VoucherRowInput,
+  UpdateDraftVoucherInput,
 } from './module.types';
 
 function slugify(value: string) {
@@ -547,6 +549,87 @@ function round2(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function parseVoucherDate(vdate: string) {
+  const parsed = new Date(`${vdate}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new HttpError(400, 'Invalid date format');
+  }
+  return parsed;
+}
+
+async function buildVoucherRows(rows: VoucherRowInput[]) {
+  const normalizedRows: VoucherRowInput[] = rows.map((row) => ({
+    accountId: row.accountId,
+    dr: Number(row.dr || 0),
+    cr: Number(row.cr || 0),
+    memo: row.memo,
+  }));
+
+  const totalDr = round2(normalizedRows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
+  const totalCr = round2(normalizedRows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
+  const diff = round2(totalDr - totalCr);
+
+  if (Math.abs(diff) > 0.01) {
+    throw new HttpError(
+      400,
+      `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`,
+    );
+  }
+
+  if (Math.abs(diff) > 0) {
+    const roundingAccountId = await ensureRoundingAccountId();
+    normalizedRows.push(
+      diff > 0
+        ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
+        : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' },
+    );
+  }
+
+  return resolveVoucherRowAccounts(normalizedRows);
+}
+
+async function createVoucherRecord(
+  input: CreateVoucherInput,
+  status: 'DRAFT' | 'POSTED',
+): Promise<VoucherDto> {
+  if (!Array.isArray(input.rows) || input.rows.length === 0) {
+    throw new HttpError(400, 'Voucher must contain at least one row');
+  }
+
+  const resolvedRows = await buildVoucherRows(input.rows);
+  const voucherNo = await generateVoucherNumber(input.vdate);
+  const vdate = parseVoucherDate(input.vdate);
+
+  const voucher = await prisma.voucher.create({
+    data: {
+      voucherNo,
+      vtype: input.vtype,
+      vdate,
+      narration: input.narration || `${input.vtype} voucher`,
+      status,
+      postedAt: status === 'POSTED' ? new Date() : null,
+      locked: status === 'POSTED',
+      rows: {
+        create: resolvedRows.map((row) => ({
+          accountId: row.accountId,
+          dr: row.dr || 0,
+          cr: row.cr || 0,
+          memo: row.memo,
+        })),
+      },
+    },
+    include: {
+      rows: {
+        include: {
+          account: true,
+        },
+      },
+    },
+  });
+
+  return mapVoucherToDto(voucher);
+}
+
 async function ensureRoundingAccountId(): Promise<string> {
   const account = await prisma.account.upsert({
     where: { code: 'AC-ROUND' },
@@ -569,86 +652,13 @@ async function ensureRoundingAccountId(): Promise<string> {
 export async function createVoucher(
   input: CreateVoucherInput,
 ): Promise<VoucherDto> {
-  if (!Array.isArray(input.rows) || input.rows.length === 0) {
-    throw new HttpError(400, 'Voucher must contain at least one row');
-  }
+  return createVoucherRecord(input, 'POSTED');
+}
 
-  const rows: VoucherRowInput[] = input.rows.map((row) => ({
-    accountId: row.accountId,
-    dr: Number(row.dr || 0),
-    cr: Number(row.cr || 0),
-    memo: row.memo,
-  }));
-
-  // Debug log for payment vouchers
-  if (input.narration?.includes('payment') || input.narration?.includes('receipt')) {
-    console.log('🔍 Settlement voucher:', {
-      narration: input.narration,
-      rows: rows.map((r) => ({
-        dr: r.dr,
-        cr: r.cr,
-        memo: r.memo,
-      })),
-    });
-  }
-
-  const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
-  const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
-  const diff = round2(totalDr - totalCr);
-
-  if (Math.abs(diff) > 0.01) {
-    throw new HttpError(
-      400,
-      `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`,
-    );
-  }
-
-  if (Math.abs(diff) > 0) {
-    const roundingAccountId = await ensureRoundingAccountId();
-    rows.push(
-      diff > 0
-        ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
-        : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' },
-    );
-  }
-
-  const resolvedRows = await resolveVoucherRowAccounts(rows);
-
-  // Generate voucher number
-  const voucherNo = await generateVoucherNumber(input.vdate);
-
-  // Parse date to ensure it's valid
-  const vdate = new Date(input.vdate + 'T00:00:00Z');
-  if (isNaN(vdate.getTime())) {
-    throw new HttpError(400, 'Invalid date format');
-  }
-
-  // Create voucher with rows in a transaction
-  const voucher = await prisma.voucher.create({
-    data: {
-      voucherNo,
-      vtype: input.vtype,
-      vdate,
-      narration: input.narration || `${input.vtype} voucher`,
-      rows: {
-        create: resolvedRows.map((row) => ({
-          accountId: row.accountId,
-          dr: row.dr || 0,
-          cr: row.cr || 0,
-          memo: row.memo,
-        })),
-      },
-    },
-    include: {
-      rows: {
-        include: {
-          account: true,
-        },
-      },
-    },
-  });
-
-  return mapVoucherToDto(voucher);
+export async function createDraftVoucher(
+  input: CreateDraftVoucherInput,
+): Promise<VoucherDto> {
+  return createVoucherRecord(input, 'DRAFT');
 }
 
 /**
@@ -679,21 +689,29 @@ export async function getVoucherById(id: string): Promise<VoucherDto> {
 export async function listVouchers(
   startDate?: string,
   endDate?: string,
+  status?: string,
 ): Promise<VoucherDto[]> {
   const where: any = {};
 
   if (startDate) {
     where.vdate = {
       ...where.vdate,
-      gte: new Date(startDate + 'T00:00:00Z'),
+      gte: new Date(`${startDate}T00:00:00Z`),
     };
   }
 
   if (endDate) {
     where.vdate = {
       ...where.vdate,
-      lte: new Date(endDate + 'T23:59:59Z'),
+      lte: new Date(`${endDate}T23:59:59Z`),
     };
+  }
+
+  if (status) {
+    where.status = status;
+  } else {
+    // Default voucher list should not include unapproved drafts.
+    where.NOT = { status: 'DRAFT' };
   }
 
   const vouchers = await prisma.voucher.findMany({
@@ -713,6 +731,104 @@ export async function listVouchers(
   return vouchers.map(mapVoucherToDto);
 }
 
+export async function listDraftVouchers(
+  startDate?: string,
+  endDate?: string,
+): Promise<VoucherDto[]> {
+  return listVouchers(startDate, endDate, 'DRAFT');
+}
+
+export async function updateDraftVoucher(
+  id: string,
+  input: UpdateDraftVoucherInput,
+): Promise<VoucherDto> {
+  const existing = await prisma.voucher.findUnique({
+    where: { id },
+    select: { id: true, status: true },
+  });
+
+  if (!existing || existing.status !== 'DRAFT') {
+    throw new HttpError(404, 'Draft voucher not found');
+  }
+
+  const resolvedRows = await buildVoucherRows(input.rows);
+  const vdate = parseVoucherDate(input.vdate);
+
+  const voucher = await prisma.$transaction(async (tx) => {
+    await tx.voucherRow.deleteMany({ where: { voucherId: id } });
+
+    return tx.voucher.update({
+      where: { id },
+      data: {
+        vtype: input.vtype,
+        vdate,
+        narration: input.narration || `${input.vtype} voucher`,
+        postedAt: null,
+        locked: false,
+        rows: {
+          create: resolvedRows.map((row) => ({
+            accountId: row.accountId,
+            dr: row.dr || 0,
+            cr: row.cr || 0,
+            memo: row.memo,
+          })),
+        },
+      },
+      include: {
+        rows: {
+          include: {
+            account: true,
+          },
+        },
+      },
+    });
+  });
+
+  return mapVoucherToDto(voucher);
+}
+
+export async function deleteDraftVoucher(id: string): Promise<void> {
+  const existing = await prisma.voucher.findUnique({
+    where: { id },
+    select: { id: true, status: true },
+  });
+
+  if (!existing || existing.status !== 'DRAFT') {
+    throw new HttpError(404, 'Draft voucher not found');
+  }
+
+  await prisma.voucher.delete({ where: { id } });
+}
+
+export async function approveDraftVoucher(id: string): Promise<VoucherDto> {
+  const existing = await prisma.voucher.findUnique({
+    where: { id },
+    select: { id: true, status: true },
+  });
+
+  if (!existing || existing.status !== 'DRAFT') {
+    throw new HttpError(404, 'Draft voucher not found');
+  }
+
+  const voucher = await prisma.voucher.update({
+    where: { id },
+    data: {
+      status: 'POSTED',
+      postedAt: new Date(),
+      locked: true,
+    },
+    include: {
+      rows: {
+        include: {
+          account: true,
+        },
+      },
+    },
+  });
+
+  return mapVoucherToDto(voucher);
+}
+
 /**
  * Helper to map Prisma voucher to DTO
  */
@@ -723,6 +839,9 @@ function mapVoucherToDto(voucher: any): VoucherDto {
     vtype: voucher.vtype,
     vdate: voucher.vdate.toISOString().split('T')[0],
     narration: voucher.narration,
+    status: voucher.status,
+    postedAt: voucher.postedAt ? voucher.postedAt.toISOString() : null,
+    deletedAt: voucher.deletedAt ? voucher.deletedAt.toISOString() : null,
     rows: voucher.rows.map((row: any) => ({
       id: row.id,
       accountId: row.accountId,
@@ -733,9 +852,7 @@ function mapVoucherToDto(voucher: any): VoucherDto {
             name: row.account.name,
             type: row.account.type,
             active: row.account.active,
-            opening: row.account.opening
-              ? Number(row.account.opening)
-              : 0,
+            opening: row.account.opening ? Number(row.account.opening) : 0,
           }
         : undefined,
       dr: Number(row.dr),
@@ -743,5 +860,6 @@ function mapVoucherToDto(voucher: any): VoucherDto {
       memo: row.memo,
     })),
     createdAt: voucher.createdAt.toISOString(),
+    updatedAt: voucher.updatedAt ? voucher.updatedAt.toISOString() : undefined,
   };
 }

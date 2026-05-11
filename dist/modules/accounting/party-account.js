@@ -11,7 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.partyAccountCode = partyAccountCode;
 exports.ensurePartyAccount = ensurePartyAccount;
-const prisma_1 = require("../../db/prisma");
+const module_service_1 = require("./module.service");
 function normalizeToken(value) {
     return value
         .trim()
@@ -26,26 +26,21 @@ function partyAccountCode(kind, refId) {
 }
 function ensurePartyAccount(params) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, _b;
         const kind = params.kind.trim().toLowerCase();
         const refId = params.refId.trim();
         const code = params.code || `AC-${kind.toUpperCase()}-${refId}`.slice(0, 64);
-        return prisma_1.prisma.account.upsert({
-            where: { code },
-            update: {
-                name: params.name.trim(),
-                type: params.type,
-                partyKind: kind,
-                partyRefId: refId,
-                active: true,
-            },
-            create: {
-                code,
-                name: params.name.trim(),
-                type: params.type,
-                partyKind: kind,
-                partyRefId: refId,
-                active: true,
-            },
+        const openingDr = Number((_a = params.openingDr) !== null && _a !== void 0 ? _a : 0);
+        const openingCr = Number((_b = params.openingCr) !== null && _b !== void 0 ? _b : 0);
+        return (0, module_service_1.createAccount)({
+            code,
+            name: params.name.trim(),
+            type: params.type,
+            openingDr: openingDr > 0 ? openingDr : 0,
+            openingCr: openingCr > 0 ? openingCr : 0,
+            active: true,
+            partyKind: kind,
+            partyRefId: refId,
         });
     });
 }

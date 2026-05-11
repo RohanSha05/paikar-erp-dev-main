@@ -6,7 +6,8 @@ import {
 	AdjustStockInput,
 	TransferStockInput,
 	InventoryDashboardQuery,
-	StockCardQuery
+	StockCardQuery,
+	InventoryReportQuery
 } from './module.types';
 
 async function moveNo(tx: Prisma.TransactionClient) {
@@ -408,6 +409,263 @@ export async function getInventoryDashboard(query: InventoryDashboardQuery) {
 			updatedAt: lot.updatedAt
 		}))
 	};
+}
+
+export async function getInventoryReport(query: InventoryReportQuery) {
+	const page = Math.max(1, query.page || 1);
+	const pageSize = Math.min(200, Math.max(1, query.pageSize || 100));
+	const skip = (page - 1) * pageSize;
+
+	const fromDate = query.from ? dateStart(query.from) : undefined;
+	const toDate = query.to ? dateEnd(query.to) : undefined;
+	const transactionType = query.transactionType || 'all';
+	const purchaseTypeSelected = transactionType === 'purchase' || transactionType === 'all';
+	const saleTypeSelected = transactionType === 'sale' || transactionType === 'all';
+
+	const purchaseOrderWhere: Prisma.PurchaseOrderWhereInput = {
+		AND: [
+			query.partyId && purchaseTypeSelected ? { sellerId: query.partyId } : {},
+			query.q
+				? {
+					OR: [
+						{ poNo: { contains: query.q, mode: 'insensitive' } },
+						{ seller: { name: { contains: query.q, mode: 'insensitive' } } },
+					]
+				}
+				: {}
+		]
+	};
+
+	const salesOrderWhere: Prisma.SalesOrderWhereInput = {
+		AND: [
+			query.partyId && saleTypeSelected ? { customerId: query.partyId } : {},
+			query.q
+				? {
+					OR: [
+						{ soNo: { contains: query.q, mode: 'insensitive' } },
+						{ customer: { name: { contains: query.q, mode: 'insensitive' } } },
+					]
+				}
+				: {}
+		]
+	};
+
+	const [purchaseOrderIds, salesOrderIds] = await Promise.all([
+		purchaseTypeSelected
+			? prisma.purchaseOrder.findMany({ where: purchaseOrderWhere, select: { id: true } })
+			: Promise.resolve([] as Array<{ id: string }>),
+		saleTypeSelected
+			? prisma.salesOrder.findMany({ where: salesOrderWhere, select: { id: true } })
+			: Promise.resolve([] as Array<{ id: string }>)
+	]);
+
+	const purchaseIds = purchaseOrderIds.map((row) => row.id);
+	const salesIds = salesOrderIds.map((row) => row.id);
+
+	const refFilter: Prisma.StockMoveWhereInput | undefined =
+		transactionType === 'purchase'
+			? { refType: 'PO', refId: { in: purchaseIds.length ? purchaseIds : ['__none__'] } }
+			: transactionType === 'sale'
+				? { refType: 'SO', refId: { in: salesIds.length ? salesIds : ['__none__'] } }
+				: {
+					OR: [
+						{ refType: 'PO', refId: { in: purchaseIds.length ? purchaseIds : ['__none__'] } },
+						{ refType: 'SO', refId: { in: salesIds.length ? salesIds : ['__none__'] } }
+					]
+				};
+
+	const baseWhere: Prisma.StockMoveWhereInput = {
+		AND: [
+			{ reason: { in: ['PURCHASE', 'SALE'] } },
+			query.warehouseId ? { warehouseId: query.warehouseId } : {},
+			query.productId ? { lot: { productId: query.productId } } : {},
+			query.q
+				? {
+					OR: [
+						{ lotLabel: { contains: query.q, mode: 'insensitive' } },
+						{ lot: { product: { name: { contains: query.q, mode: 'insensitive' } } } },
+						{ warehouse: { name: { contains: query.q, mode: 'insensitive' } } }
+					]
+				}
+				: {},
+			refFilter ?? {}
+		]
+	};
+
+	const inRangeWhere: Prisma.StockMoveWhereInput = {
+		AND: [
+			baseWhere,
+			fromDate ? { createdAt: { gte: fromDate } } : {},
+			toDate ? { createdAt: { lte: toDate } } : {}
+		]
+	};
+
+	const openingWhere: Prisma.StockMoveWhereInput = fromDate
+		? { AND: [baseWhere, { createdAt: { lt: fromDate } }] }
+		: { AND: [baseWhere] };
+
+	const [total, rows, openingRows, periodRows] = await Promise.all([
+		prisma.stockMove.count({ where: inRangeWhere }),
+		prisma.stockMove.findMany({
+			where: inRangeWhere,
+			skip,
+			take: pageSize,
+			orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+			include: {
+				warehouse: { select: { id: true, name: true } },
+				lot: {
+					include: {
+						product: { select: { id: true, name: true } },
+						sourcePo: { include: { seller: { select: { id: true, name: true } } } }
+					}
+				}
+			}
+		}),
+		prisma.stockMove.findMany({
+			where: openingWhere,
+			select: { qtyKg: true, lotId: true, refType: true, refId: true, lot: { select: { avgCostPerKg: true } } }
+		}),
+		prisma.stockMove.findMany({
+			where: inRangeWhere,
+			select: { qtyKg: true, lotId: true, refType: true, refId: true, lot: { select: { avgCostPerKg: true } } }
+		})
+	]);
+
+	const saleRowIds = rows.filter((row) => row.refType === 'SO').map((row) => row.refId);
+	const salesOrders = saleRowIds.length
+		? await prisma.salesOrder.findMany({
+			where: { id: { in: saleRowIds } },
+			select: {
+				id: true,
+				soNo: true,
+				customerId: true,
+				customer: { select: { id: true, name: true } },
+				customerSnapshot: true
+			}
+		})
+		: [];
+	const salesOrderById = Object.fromEntries(salesOrders.map((order) => [order.id, order]));
+
+	const purchaseRows = periodRows.filter((row) => row.refType === 'PO');
+	const saleRows = periodRows.filter((row) => row.refType === 'SO');
+
+	const openingQtyKg = openingRows.reduce((sum, row) => sum + toNumber(row.qtyKg), 0);
+	const openingAmount = openingRows.reduce((sum, row) => {
+		const qty = toNumber(row.qtyKg);
+		const unitCost = toNumber(row.lot?.avgCostPerKg);
+		const amount = Math.abs(qty) * unitCost;
+		return sum + (qty >= 0 ? amount : -amount);
+	}, 0);
+
+	const periodTotals = periodRows.reduce(
+		(acc, row) => {
+			const qty = toNumber(row.qtyKg);
+			const unitCost = toNumber(row.lot?.avgCostPerKg);
+			const amount = Math.abs(qty) * unitCost;
+			if (qty >= 0) {
+				acc.totalDrKg += qty;
+				acc.totalDrAmount += amount;
+			} else {
+				acc.totalCrKg += Math.abs(qty);
+				acc.totalCrAmount += amount;
+			}
+			return acc;
+		},
+		{ totalDrKg: 0, totalCrKg: 0, totalDrAmount: 0, totalCrAmount: 0 }
+	);
+
+	const totalInKg = periodTotals.totalDrKg;
+	const totalOutKg = periodTotals.totalCrKg;
+	const closingQtyKg = openingQtyKg + totalInKg - totalOutKg;
+	const closingAmount = openingAmount + periodTotals.totalDrAmount - periodTotals.totalCrAmount;
+
+	const items = rows.map((m) => {
+		const qtyKg = Math.abs(toNumber(m.qtyKg));
+		const unitCost = toNumber(m.lot?.avgCostPerKg);
+		const totalPrice = qtyKg * unitCost;
+		const isPurchase = m.refType === 'PO';
+		const so = isPurchase ? null : salesOrderById[m.refId];
+		const po = m.lot?.sourcePo;
+
+		return {
+			id: m.id,
+			createdAt: m.createdAt,
+			transactionType: isPurchase ? 'purchase' : 'sale',
+			poNo: po?.poNo,
+			soNo: so?.soNo,
+			sellerId: po?.sellerId,
+			sellerName: po?.seller?.name,
+			customerId: so?.customerId,
+			customerName: so?.customer?.name || (so?.customerSnapshot as { name?: string } | null | undefined)?.name,
+			lotId: m.lotId,
+			lotLabel: m.lotLabel || m.lot?.label || '',
+			productId: m.lot?.productId || '',
+			productName: m.lot?.product?.name || '',
+			warehouseId: m.warehouseId,
+			warehouseName: m.warehouse?.name || '',
+			qtyKg,
+			unitCost,
+			totalPrice,
+			drKg: isPurchase ? qtyKg : 0,
+			crKg: isPurchase ? 0 : qtyKg,
+			drAmount: isPurchase ? totalPrice : 0,
+			crAmount: isPurchase ? 0 : totalPrice,
+			reason: m.reason,
+			refType: m.refType,
+			refId: m.refId,
+			memo: m.memo
+		};
+	});
+
+	return {
+		summary: {
+			openingQtyKg,
+			openingAmount,
+			totalDrKg: periodTotals.totalDrKg,
+			totalCrKg: periodTotals.totalCrKg,
+			totalDrAmount: periodTotals.totalDrAmount,
+			totalCrAmount: periodTotals.totalCrAmount,
+			totalInKg,
+			totalOutKg,
+			closingAmount,
+			closingQtyKg,
+			totalLots: new Set(periodRows.map((row) => row.lotId)).size,
+			purchaseCount: purchaseRows.length,
+			saleCount: saleRows.length
+		},
+		pagination: {
+			page,
+			pageSize,
+			total,
+			totalPages: Math.ceil(total / pageSize)
+		},
+		items
+	};
+}
+
+// Reconcile lot availableKg using stock moves sum
+export async function reconcileAllLots() {
+	return prisma.$transaction(async (tx) => {
+		// get all lot ids
+		const lots = await tx.lot.findMany({ select: { id: true, availableKg: true, label: true } });
+		const results: Array<{ lotId: string; label?: string; old: number; computed: number; changed: boolean }> = [];
+
+		for (const l of lots) {
+			const sumRow: any = await tx.stockMove.aggregate({
+				where: { lotId: l.id },
+				_sum: { qtyKg: true }
+			});
+			const computed = Number(sumRow._sum?.qtyKg || 0);
+			const old = Number(l.availableKg || 0);
+			const changed = Math.abs(old - computed) > 0.00001;
+			if (changed) {
+				await tx.lot.update({ where: { id: l.id }, data: { availableKg: new Prisma.Decimal(computed) } });
+			}
+			results.push({ lotId: l.id, label: l.label, old, computed, changed });
+		}
+
+		return { summary: { totalLots: results.length, changed: results.filter(r => r.changed).length }, details: results };
+	});
 }
 
 export async function getStockCard(query: StockCardQuery) {

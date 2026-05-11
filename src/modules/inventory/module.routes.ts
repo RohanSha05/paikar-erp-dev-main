@@ -6,12 +6,14 @@ import {
 	adjustStockSchema,
 	transferStockSchema,
 	inventoryDashboardSchema,
+	inventoryReportSchema,
 	stockCardQuerySchema
 } from './module.validator';
 
 const router = Router();
 
 router.get('/dashboard', requireAuth, validate(inventoryDashboardSchema), controller.dashboard);
+router.get('/report', requireAuth, validate(inventoryReportSchema), controller.report);
 router.get('/stock-card', requireAuth, validate(stockCardQuerySchema), controller.stockCard);
 
 router.post(
@@ -28,6 +30,13 @@ router.post(
 	requireRole(['ADMIN', 'OPERATOR']),
 	validate(transferStockSchema),
 	controller.transfer
+);
+
+router.post(
+	'/reconcile',
+	requireAuth,
+	requireRole(['ADMIN']),
+	controller.reconcile
 );
 
 export default router;

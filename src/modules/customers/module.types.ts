@@ -4,6 +4,8 @@ export type CreateCustomerInput = {
   district?: string;
   market?: string;
   phone?: string;
+  paona?: number;
+  dena?: number;
   type?: 'mill' | 'retailer' | 'other';
   nidNumber?: string;
   emergencyPhone?: string;

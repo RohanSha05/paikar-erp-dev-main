@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.confirmSalesOrderParamsSchema = exports.updateSalesOrderSchema = exports.createSalesOrderSchema = void 0;
+exports.deleteSalesOrderSchema = exports.confirmSalesOrderParamsSchema = exports.updateSalesOrderSchema = exports.createSalesOrderSchema = void 0;
 const zod_1 = require("zod");
 const salesItemSchema = zod_1.z.object({
     lotId: zod_1.z.string().min(1),
@@ -41,11 +41,22 @@ exports.updateSalesOrderSchema = zod_1.z.object({
         loadingUnloading: zod_1.z.number().min(0).default(0),
         misc: zod_1.z.number().min(0).default(0),
         remarks: zod_1.z.string().optional(),
-        items: zod_1.z.array(salesItemSchema).min(1)
+        items: zod_1.z.array(salesItemSchema).min(1),
+        editPassword: zod_1.z.string().min(6).optional()
     })
 });
 exports.confirmSalesOrderParamsSchema = zod_1.z.object({
     params: zod_1.z.object({
         id: zod_1.z.string().min(1)
     })
+});
+exports.deleteSalesOrderSchema = zod_1.z.object({
+    params: zod_1.z.object({
+        id: zod_1.z.string().min(1)
+    }),
+    body: zod_1.z
+        .object({
+        editPassword: zod_1.z.string().min(6).optional()
+    })
+        .default({})
 });

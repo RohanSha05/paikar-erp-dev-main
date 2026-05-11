@@ -40,10 +40,10 @@ export async function createDraft(req: Request, res: Response, next: NextFunctio
 
 export async function updateDraft(req: Request, res: Response, next: NextFunction) {
   try {
-    const updated = await service.updatePurchaseOrderDraft(req.params.id, req.body);
+    const updated = await service.updatePurchaseOrderDraft(req.params.id, req.body, req.authUser?.userId);
     return res.json({
       success: true,
-      message: 'Purchase draft updated',
+      message: 'Purchase order updated',
       data: updated
     });
   } catch (error) {
@@ -57,6 +57,21 @@ export async function approve(req: Request, res: Response, next: NextFunction) {
     return res.json({
       success: true,
       message: 'Purchase approved',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deletePurchaseOrder(req: Request, res: Response, next: NextFunction) {
+  try {
+    const id = req.params.id;
+    const userId = req.authUser?.userId;
+    const result = await service.deletePurchaseOrder(id, req.body, userId);
+    return res.json({
+      success: true,
+      message: 'Purchase order deleted',
       data: result
     });
   } catch (error) {

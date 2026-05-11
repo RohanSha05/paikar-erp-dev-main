@@ -47,6 +47,7 @@ exports.getById = getById;
 exports.createDraft = createDraft;
 exports.updateDraft = updateDraft;
 exports.approve = approve;
+exports.deletePurchaseOrder = deletePurchaseOrder;
 const service = __importStar(require("./purchase.service"));
 function list(_req, res, next) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -93,11 +94,12 @@ function createDraft(req, res, next) {
 }
 function updateDraft(req, res, next) {
     return __awaiter(this, void 0, void 0, function* () {
+        var _a;
         try {
-            const updated = yield service.updatePurchaseOrderDraft(req.params.id, req.body);
+            const updated = yield service.updatePurchaseOrderDraft(req.params.id, req.body, (_a = req.authUser) === null || _a === void 0 ? void 0 : _a.userId);
             return res.json({
                 success: true,
-                message: 'Purchase draft updated',
+                message: 'Purchase order updated',
                 data: updated
             });
         }
@@ -113,6 +115,24 @@ function approve(req, res, next) {
             return res.json({
                 success: true,
                 message: 'Purchase approved',
+                data: result
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function deletePurchaseOrder(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        var _a;
+        try {
+            const id = req.params.id;
+            const userId = (_a = req.authUser) === null || _a === void 0 ? void 0 : _a.userId;
+            const result = yield service.deletePurchaseOrder(id, req.body, userId);
+            return res.json({
+                success: true,
+                message: 'Purchase order deleted',
                 data: result
             });
         }

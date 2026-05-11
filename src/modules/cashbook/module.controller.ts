@@ -6,6 +6,11 @@ import {
   resolvePartyAccount,
   createVoucher,
   listVouchers,
+  createDraftVoucher,
+  listDraftVouchers,
+  updateDraftVoucher,
+  deleteDraftVoucher,
+  approveDraftVoucher,
 } from './module.service';
 
 /**
@@ -131,8 +136,9 @@ export async function getVouchers(
   try {
     const startDate = req.query.startDate as string | undefined;
     const endDate = req.query.endDate as string | undefined;
+    const status = req.query.status as string | undefined;
 
-    const vouchers = await listVouchers(startDate, endDate);
+    const vouchers = await listVouchers(startDate, endDate, status);
 
     res.json({
       success: true,
@@ -142,3 +148,96 @@ export async function getVouchers(
     next(error);
   }
 }
+
+export async function getDraftVouchers(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const startDate = req.query.startDate as string | undefined;
+    const endDate = req.query.endDate as string | undefined;
+
+    const vouchers = await listDraftVouchers(startDate, endDate);
+
+    res.json({
+      success: true,
+      data: vouchers,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function createDraftVoucherHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const voucher = await createDraftVoucher(req.body);
+
+    res.status(201).json({
+      success: true,
+      data: voucher,
+      message: `Draft ${voucher.voucherNo} created successfully`,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateDraftVoucherHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const voucher = await updateDraftVoucher(req.params.id, req.body);
+
+    res.json({
+      success: true,
+      data: voucher,
+      message: `Draft ${voucher.voucherNo} updated successfully`,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function deleteDraftVoucherHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    await deleteDraftVoucher(req.params.id);
+
+    res.json({
+      success: true,
+      message: 'Draft deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function approveDraftVoucherHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const voucher = await approveDraftVoucher(req.params.id);
+
+    res.json({
+      success: true,
+      data: voucher,
+      message: `Voucher ${voucher.voucherNo} approved successfully`,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+

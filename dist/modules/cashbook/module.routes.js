@@ -11,10 +11,6 @@ const router = (0, express_1.Router)();
  * List all party accounts
  */
 router.get('/parties', auth_1.requireAuth, module_controller_1.getParties);
-/**
- * POST /api/v1/cashbook/parties
- * Create party
- */
 router.post('/parties', auth_1.requireAuth, (0, validate_1.validate)(module_validator_1.createPartySchema), module_controller_1.createPartyHandler);
 /**
  * POST /api/v1/cashbook/parties/:partyId/account
@@ -36,4 +32,9 @@ router.post('/vouchers', auth_1.requireAuth, (0, validate_1.validate)(module_val
  * List vouchers
  */
 router.get('/vouchers', auth_1.requireAuth, module_controller_1.getVouchers);
+router.get('/vouchers/drafts', auth_1.requireAuth, module_controller_1.getDraftVouchers);
+router.post('/vouchers/drafts', auth_1.requireAuth, (0, validate_1.validate)(module_validator_1.createDraftVoucherSchema), module_controller_1.createDraftVoucherHandler);
+router.patch('/vouchers/drafts/:id', auth_1.requireAuth, (0, validate_1.validate)(module_validator_1.draftVoucherParamsSchema), (0, validate_1.validate)(module_validator_1.updateDraftVoucherSchema), module_controller_1.updateDraftVoucherHandler);
+router.delete('/vouchers/drafts/:id', auth_1.requireAuth, (0, validate_1.validate)(module_validator_1.draftVoucherParamsSchema), module_controller_1.deleteDraftVoucherHandler);
+router.post('/vouchers/drafts/:id/approve', auth_1.requireAuth, (0, validate_1.validate)(module_validator_1.draftVoucherParamsSchema), module_controller_1.approveDraftVoucherHandler);
 exports.default = router;

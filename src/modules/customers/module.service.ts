@@ -10,16 +10,17 @@ export async function listCustomers() {
 }
 
 export async function createCustomer(input: CreateCustomerInput) {
+  const { paona, dena, ...customerData } = input;
   const customer = await prisma.customer.create({
     data: {
-      name: input.name,
-      district: input.district,
-      market: input.market,
-      phone: input.phone,
-      address: input.address,
-      type: input.type || 'other',
-      nidNumber: input.nidNumber,
-      emergencyPhone: input.emergencyPhone,
+      name: customerData.name,
+      district: customerData.district,
+      market: customerData.market,
+      phone: customerData.phone,
+      address: customerData.address,
+      type: customerData.type || 'other',
+      nidNumber: customerData.nidNumber,
+      emergencyPhone: customerData.emergencyPhone,
     },
   });
 
@@ -28,6 +29,8 @@ export async function createCustomer(input: CreateCustomerInput) {
     refId: customer.id,
     name: customer.name,
     type: 'party',
+    openingDr: paona,
+    openingCr: dena,
   });
 
   return customer;

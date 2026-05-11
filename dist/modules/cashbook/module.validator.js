@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createVoucherSchema = exports.createPartySchema = exports.voucherRowSchema = void 0;
+exports.draftVoucherParamsSchema = exports.updateDraftVoucherSchema = exports.createDraftVoucherSchema = exports.createVoucherSchema = exports.createPartySchema = exports.voucherRowSchema = void 0;
 const zod_1 = require("zod");
 exports.voucherRowSchema = zod_1.z.object({
     accountId: zod_1.z.string().trim().min(1, { message: 'Invalid account ID' }),
@@ -34,5 +34,12 @@ exports.createVoucherSchema = zod_1.z.object({
     }, {
         message: 'Total debits must equal total credits',
         path: ['rows'],
+    }),
+});
+exports.createDraftVoucherSchema = exports.createVoucherSchema;
+exports.updateDraftVoucherSchema = exports.createVoucherSchema;
+exports.draftVoucherParamsSchema = zod_1.z.object({
+    params: zod_1.z.object({
+        id: zod_1.z.string().trim().min(1, { message: 'Invalid voucher ID' }),
     }),
 });

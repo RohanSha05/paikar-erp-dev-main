@@ -1,4 +1,5 @@
 import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreatePurchaseOrderDraftInput, UpdatePurchaseOrderDraftInput } from './purchase.validator';
@@ -440,20 +441,31 @@ export async function createDraft(input: CreatePurchaseOrderDraftInput) {
 
 export async function updatePurchaseOrderDraft(
   id: string,
-  input: UpdatePurchaseOrderDraftInput
+  input: UpdatePurchaseOrderDraftInput,
+  userId?: string
 ) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.purchaseOrder.findUnique({
       where: { id },
-      include: { items: true }
+      include: {
+        items: true,
+        warehouse: true,
+        seller: true,
+      }
     });
 
     if (!existing) {
       throw new HttpError(404, 'Purchase order not found');
     }
 
-    if (existing.status !== 'DRAFT') {
-      throw new HttpError(409, 'Only draft PO can be edited');
+    if (existing.status === 'APPROVED') {
+      await verifyConfirmedPurchasePassword(input.editPassword, userId, 'edit');
+      await validatePurchaseCanBeEdited(id);
+
+      await reversePurchaseOrderImpact(tx, existing, userId);
+      await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
+    } else if (existing.status !== 'DRAFT') {
+      throw new HttpError(409, 'Only draft or approved PO can be edited');
     }
 
     const seller = await tx.seller.findUnique({ where: { id: input.sellerId } });
@@ -468,8 +480,6 @@ export async function updatePurchaseOrderDraft(
       select: { id: true, name: true }
     });
     const productNameById = new Map(products.map((product) => [product.id, product.name]));
-
-    await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
 
     const updated = await tx.purchaseOrder.update({
       where: { id },
@@ -526,6 +536,23 @@ export async function updatePurchaseOrderDraft(
       `;
     }
 
+    if (existing.status === 'APPROVED') {
+      const reloaded = await tx.purchaseOrder.findUnique({
+        where: { id: updated.id },
+        include: {
+          items: true,
+          warehouse: true,
+          seller: true,
+        }
+      });
+
+      if (!reloaded) {
+        throw new HttpError(404, 'Purchase order not found after update');
+      }
+
+      return applyApprovedPurchaseOrderImpact(tx, reloaded);
+    }
+
     return {
       success: true,
       message: 'Purchase order draft updated',
@@ -548,79 +575,226 @@ export async function approvePurchaseOrder(id: string) {
 
     if (!po) throw new HttpError(404, 'Purchase order not found');
     if (po.status !== 'DRAFT') throw new HttpError(400, 'Only draft PO can be approved');
-    if (!po.items.length) throw new HttpError(400, 'PO has no items');
+    return applyApprovedPurchaseOrderImpact(tx, po);
+  });
+}
 
+async function verifyConfirmedPurchasePassword(
+  password: string | undefined,
+  userId: string | undefined,
+  action: 'edit' | 'delete'
+) {
+  if (!userId) {
+    throw new HttpError(401, 'Unauthorized');
+  }
+  if (!password) {
+    throw new HttpError(403, `Confirmed purchase ${action} requires password`);
+  }
 
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { passwordHash: true, active: true }
+  });
 
-    const transportMode = String(po.transportMode || '').toLowerCase();
-    const isOwnTruck = transportMode === 'owntruck';
+  if (!user || !user.active) {
+    throw new HttpError(401, 'Invalid user');
+  }
 
-    if (isOwnTruck && !po.driverId) {
-      throw new HttpError(400, 'Driver is required for OWN_TRUCK');
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) {
+    throw new HttpError(401, `Incorrect password for confirmed purchase ${action}`);
+  }
+}
+
+async function reversePurchaseOrderImpact(
+  tx: Prisma.TransactionClient,
+  po: { id: string; poNo: string; lots?: Array<{ id: string }> },
+  userId?: string
+) {
+  // Get all lots associated with this PO
+  const lots = await tx.lot.findMany({
+    where: { sourcePoId: po.id },
+    select: { id: true }
+  });
+
+  const lotIds = lots.map((lot) => lot.id);
+
+  if (lotIds.length) {
+    const params = lotIds.map((_, index) => `$${index + 1}`).join(',');
+    await tx.$queryRawUnsafe(
+      `SELECT id FROM "Lot" WHERE id IN (${params}) FOR UPDATE`,
+      ...lotIds,
+    );
+  }
+
+  // Reverse all stock moves for this PO
+  const prevMoves = await tx.stockMove.findMany({
+    where: { refType: StockRefType.PO, refId: po.id }
+  });
+
+  for (const move of prevMoves) {
+    const qty = Number(move.qtyKg || 0);
+
+    await tx.stockMove.create({
+      data: {
+        moveNo: await stockMoveNo(tx),
+        lotId: move.lotId,
+        warehouseId: move.warehouseId,
+        qtyKg: new Prisma.Decimal(-qty),
+        reason: StockMoveReason.ADJUSTMENT,
+        refType: StockRefType.PO,
+        refId: po.id,
+        memo: `Reversal of ${move.moveNo} for PO ${po.poNo}`,
+        createdBy: userId,
+      }
+    });
+  }
+
+  // Reverse all vouchers for this PO
+  const prevVouchers = await tx.voucher.findMany({
+    where: { purchaseOrderId: po.id },
+    include: { rows: true }
+  });
+
+  for (const voucher of prevVouchers) {
+    const reversalVoucher = await tx.voucher.create({
+      data: {
+        voucherNo: await voucherNo(tx),
+        vtype: voucher.vtype,
+        vdate: new Date(),
+        narration: `Reversal of ${voucher.voucherNo} for PO ${po.poNo}`,
+        purchaseOrderId: po.id,
+      }
+    });
+
+    // Create reversing rows (DR/CR flipped)
+    const reversalRows = voucher.rows.map((row) => ({
+      voucherId: reversalVoucher.id,
+      accountId: row.accountId,
+      dr: new Prisma.Decimal(Number(row.cr || 0)),
+      cr: new Prisma.Decimal(Number(row.dr || 0)),
+      memo: row.memo,
+    }));
+
+    if (reversalRows.length) {
+      await tx.voucherRow.createMany({ data: reversalRows });
+    }
+  }
+
+  // Update lot availableKg to restore reversed quantities
+  for (const lotId of lotIds) {
+    const sumRow: any = await tx.stockMove.aggregate({
+      where: { lotId },
+      _sum: { qtyKg: true }
+    });
+    const totalQty = Number(sumRow._sum?.qtyKg || 0);
+
+    await tx.lot.update({
+      where: { id: lotId },
+      data: { availableKg: new Prisma.Decimal(Math.max(0, totalQty)) }
+    });
+  }
+}
+
+async function validatePurchaseCanBeDeleted(poId: string) {
+  // Check if any SalesOrderItems reference lots from this PO
+  const activeSalesCount = await prisma.salesOrderItem.count({
+    where: {
+      lot: {
+        sourcePoId: poId
+      },
+      salesOrder: {
+        status: {
+          in: ['DRAFT', 'CONFIRMED']
+        }
+      }
+    }
+  });
+
+  if (activeSalesCount > 0) {
+    throw new HttpError(
+      409,
+      `PO মুছে ফেলা যাচ্ছে না। এতে ${activeSalesCount}টি সক্রিয় সেলস অর্ডার রয়েছে। অনুগ্রহ করে আগে ওই সেলস অর্ডারগুলো মুছে ফেলুন বা ক্লিয়ার করুন।`
+    );
+  }
+}
+
+async function validatePurchaseCanBeEdited(poId: string) {
+  return validatePurchaseCanBeDeleted(poId);
+}
+
+async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po: any) {
+  const transportMode = String(po.transportMode || '').toLowerCase();
+  const isOwnTruck = transportMode === 'owntruck';
+
+  if (!po.items.length) {
+    throw new HttpError(400, 'PO has no items');
+  }
+
+  const costBreakdown = computePurchaseTotals(po);
+
+  let totalBags = 0;
+  let basePurchase = 0;
+  let totalStockKg = 0;
+  const poExtended = po as typeof po & { bagCostMode?: string | null; loadingUnloading?: Prisma.Decimal | null };
+  const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
+  const createdLotIds: string[] = [];
+
+  for (const [index, item] of po.items.entries()) {
+    const bagCount = Number(item.bagCount);
+    if (!Number.isFinite(bagCount) || bagCount <= 0) {
+      throw new HttpError(400, `Invalid bag count for product ${item.productId}: must be greater than 0`);
     }
 
-    const costBreakdown = computePurchaseTotals(po);
+    const actualKg = Number(item.actualKgPerBag);
+    const accountingKg = Number(item.accountingKgPerBag);
+    if (!Number.isFinite(actualKg) || actualKg < 0 || !Number.isFinite(accountingKg) || accountingKg < 0) {
+      throw new HttpError(400, `Invalid kg per bag values for product ${item.productId}`);
+    }
 
-    let totalBags = 0;
-    let basePurchase = 0;
-    let totalStockKg = 0;
-    const poExtended = po as typeof po & { bagCostMode?: string | null; loadingUnloading?: Prisma.Decimal | null };
-    const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
+    const actual = actualKg * bagCount;
+    const accounting = accountingKg * bagCount;
+    const stockKg = item.weightPolicy === 'actual' ? actual : accounting;
 
-    for (const [index, item] of po.items.entries()) {
-      const bagCount = Number(item.bagCount);
-      if (!Number.isFinite(bagCount) || bagCount <= 0) {
-        throw new HttpError(400, `Invalid bag count for product ${item.productId}: must be greater than 0`);
-      }
-      
-      const actualKg = Number(item.actualKgPerBag);
-      const accountingKg = Number(item.accountingKgPerBag);
-      if (!Number.isFinite(actualKg) || actualKg < 0 || !Number.isFinite(accountingKg) || accountingKg < 0) {
-        throw new HttpError(400, `Invalid kg per bag values for product ${item.productId}`);
-      }
+    if (stockKg <= 0) {
+      throw new HttpError(400, `Invalid stock quantity for product ${item.productId}: calculated as ${stockKg} kg`);
+    }
 
-      const actual = actualKg * bagCount;
-      const accounting = accountingKg * bagCount;
-      const stockKg = item.weightPolicy === 'actual' ? actual : accounting;
-      
-      if (stockKg <= 0) {
-        throw new HttpError(400, `Invalid stock quantity for product ${item.productId}: calculated as ${stockKg} kg`);
-      }
-
-     let lineBase: number;
-     let rpk: number;
+    let lineBase: number;
+    let rpk: number;
 
     if (item.rateBasis === 'perBag') {
-      lineBase = item.bagCount * Number(item.rateValue);       // bags × rate
-      rpk = stockKg > 0 ? lineBase / stockKg : 0;             // effective rate for avgCost
+      lineBase = item.bagCount * Number(item.rateValue);
+      rpk = stockKg > 0 ? lineBase / stockKg : 0;
     } else {
       rpk = ratePerKg(item.rateBasis as 'perKg' | 'perMon', Number(item.rateValue));
       lineBase = stockKg * rpk;
     }
-      totalBags += item.bagCount;
-      totalStockKg += stockKg;
-      basePurchase += lineBase;
 
-      const lineSummary = costBreakdown.productSummaries[index];
-      const lineCost = lineSummary?.lineCost ?? (lineBase + item.bagCount * bagCostPerBag);
-      const avgCostPerKg = lineSummary?.avgPerKg ?? (stockKg > 0 ? lineCost / stockKg : 0);
+    totalBags += item.bagCount;
+    totalStockKg += stockKg;
+    basePurchase += lineBase;
 
-      const product = await tx.product.findUnique({
-        where: { id: item.productId },
-        select: {
-          name: true,
-          category: true,
-          unit: true,
-        },
-      });
+    const lineSummary = costBreakdown.productSummaries[index];
+    const lineCost = lineSummary?.lineCost ?? (lineBase + item.bagCount * bagCostPerBag);
+    const avgCostPerKg = lineSummary?.avgPerKg ?? (stockKg > 0 ? lineCost / stockKg : 0);
+
+    const product = await tx.product.findUnique({
+      where: { id: item.productId },
+      select: {
+        name: true,
+        category: true,
+        unit: true,
+      },
+    });
 
     const nextLotNo = await lotNo(tx);
     const sellerName = po.seller.name;
 
-      const lot = await tx.lot.create({
-        data: {
-          lotNo: nextLotNo,
-          label: buildLotLabel({
+    const lot = await tx.lot.create({
+      data: {
+        lotNo: nextLotNo,
+        label: buildLotLabel({
           lotNo: nextLotNo,
           sellerName,
           date: new Date(po.createdAt || new Date()),
@@ -628,108 +802,93 @@ export async function approvePurchaseOrder(id: string) {
           productName: product?.name || 'UNKNOWN',
           weightKg: stockKg,
           rateBasis: item.rateBasis as 'perKg' | 'perMon' | 'perBag',
-          rateValue: Number(item.rateValue), 
+          rateValue: Number(item.rateValue),
         }),
-          productId: item.productId,
-          warehouseId: po.warehouseId,
-          availableKg: new Prisma.Decimal(stockKg),
-          avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
-          sourcePoId: po.id,
-          sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.actualKgPerBag) , bagCount: Number(item.bagCount)}
-        },
-      });
-
-      await tx.stockMove.create({
-        data: {
-          moveNo: await stockMoveNo(tx),
-          lotId: lot.id,
-          warehouseId: po.warehouseId,
-          qtyKg: new Prisma.Decimal(stockKg),
-          reason: StockMoveReason.PURCHASE,
-          refType: StockRefType.PO,
-          refId: po.id
-        }
-      });
-    }
-
-    const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
-
-    const transportCost = Number(po.transport);
-
-
-    const extraCosts =
-       transportCost +
-       headerLoading +
-      Number(po.misc) +
-      totalBags * bagCostPerBag;
-
-    // const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
-    // const extraCosts = Number(po.transport) + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
-    const totalCost = basePurchase + extraCosts;
-
-
-    const inventoryAccount = await tx.account.upsert({
-      where: { code: 'AC-INVENTORY' },
-      update: {},
-      create: { code: 'AC-INVENTORY', name: 'Inventory', type: 'asset' }
+        productId: item.productId,
+        warehouseId: po.warehouseId,
+        availableKg: new Prisma.Decimal(stockKg),
+        avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
+        sourcePoId: po.id,
+        sourcePoItemId: item.id,
+        meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+      },
     });
-    const sellerAccount = await ensurePartyAccount({
-      kind: 'seller',
-      refId: po.seller.id,
-      name: po.seller.name, 
-      type: 'party',
-    });
-    const inventoryAccountRef = await resolveVoucherAccountRef(tx, inventoryAccount.code);
-    const sellerAccountRef = await resolveVoucherAccountRef(tx, sellerAccount.code);
 
-    let driverAccountRef: any = null;
-
-
-    if (isOwnTruck) {
-      const driverAccount = await ensurePartyAccount({
-        kind: 'driver',
-        refId: po.driverId!,
-        name: po.driverName || 'Driver',
-        type: 'party',
-      });
-
-      driverAccountRef = await resolveVoucherAccountRef(tx, driverAccount.code);
-    }
-
-    const voucher = await tx.voucher.create({
+    await tx.stockMove.create({
       data: {
-        voucherNo: await voucherNo(tx),
-        vtype: 'journal',
-        vdate: new Date(),
-        narration: `Auto purchase approval for ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
-        purchaseOrderId: po.id
+        moveNo: await stockMoveNo(tx),
+        lotId: lot.id,
+        warehouseId: po.warehouseId,
+        qtyKg: new Prisma.Decimal(stockKg),
+        reason: StockMoveReason.PURCHASE,
+        refType: StockRefType.PO,
+        refId: po.id
       }
     });
-    
+    createdLotIds.push(lot.id);
+  }
 
-   const rows: any[] = [];
+  const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
+  const transportCost = Number(po.transport);
+  const extraCosts = transportCost + headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
+  const totalCost = basePurchase + extraCosts;
 
-    // 1. Inventory (FULL COST)
-    rows.push({
-      voucherId: voucher.id,
-      accountId: inventoryAccountRef.id,
-      dr: new Prisma.Decimal(totalCost),
-      cr: new Prisma.Decimal(0),
-      memo: `PO ${po.poNo} inventory`,
+  const inventoryAccount = await tx.account.upsert({
+    where: { code: 'AC-INVENTORY' },
+    update: {},
+    create: { code: 'AC-INVENTORY', name: 'Inventory', type: 'asset' }
+  });
+  const sellerAccount = await ensurePartyAccount({
+    kind: 'seller',
+    refId: po.seller.id,
+    name: po.seller.name,
+    type: 'party',
+  });
+  const inventoryAccountRef = await resolveVoucherAccountRef(tx, inventoryAccount.code);
+  const sellerAccountRef = await resolveVoucherAccountRef(tx, sellerAccount.code);
+
+  let driverAccountRef: any = null;
+
+  if (isOwnTruck) {
+    const driverAccount = await ensurePartyAccount({
+      kind: 'driver',
+      refId: po.driverId!,
+      name: po.driverName || 'Driver',
+      type: 'party',
     });
 
-    // 2. Seller (ONLY GOODS)
-    rows.push({
-      voucherId: voucher.id,
-      accountId: sellerAccountRef.id,
-      dr: new Prisma.Decimal(0),
-      cr: new Prisma.Decimal(basePurchase),
-      memo: `PO ${po.poNo} goods payable`,
-    });
+    driverAccountRef = await resolveVoucherAccountRef(tx, driverAccount.code);
+  }
 
-    // 3. Driver (ONLY TRANSPORT)
-    if (isOwnTruck && driverAccountRef && transportCost > 0) {
+  const voucher = await tx.voucher.create({
+    data: {
+      voucherNo: await voucherNo(tx),
+      vtype: 'journal',
+      vdate: new Date(),
+      narration: `Auto purchase approval for ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
+      purchaseOrderId: po.id
+    }
+  });
+
+  const rows: any[] = [];
+
+  rows.push({
+    voucherId: voucher.id,
+    accountId: inventoryAccountRef.id,
+    dr: new Prisma.Decimal(totalCost),
+    cr: new Prisma.Decimal(0),
+    memo: `PO ${po.poNo} inventory`,
+  });
+
+  rows.push({
+    voucherId: voucher.id,
+    accountId: sellerAccountRef.id,
+    dr: new Prisma.Decimal(0),
+    cr: new Prisma.Decimal(basePurchase),
+    memo: `PO ${po.poNo} goods payable`,
+  });
+
+  if (isOwnTruck && driverAccountRef && transportCost > 0) {
     rows.push({
       voucherId: voucher.id,
       accountId: driverAccountRef.id,
@@ -739,56 +898,99 @@ export async function approvePurchaseOrder(id: string) {
     });
   }
 
-    // 4. OTHER COST (loading + misc + bag)
-    const otherCost =
-      headerLoading +
-      Number(po.misc) +
-      totalBags * bagCostPerBag;
+  const otherCost = headerLoading + Number(po.misc) + totalBags * bagCostPerBag;
 
-    if (otherCost > 0) {
-      const expenseAccount = await tx.account.upsert({
-        where: { code: 'AC-PURCHASE-EXP' },
-        update: {},
-        create: {
-          code: 'AC-PURCHASE-EXP',
-          name: 'Purchase Expenses',
-          type: 'expense',
-        },
-      });
+  if (otherCost > 0) {
+    const expenseAccount = await tx.account.upsert({
+      where: { code: 'AC-PURCHASE-EXP' },
+      update: {},
+      create: {
+        code: 'AC-PURCHASE-EXP',
+        name: 'Purchase Expenses',
+        type: 'expense',
+      },
+    });
 
-      const expenseRef = await resolveVoucherAccountRef(tx, expenseAccount.code);
+    const expenseRef = await resolveVoucherAccountRef(tx, expenseAccount.code);
 
-      rows.push({
-        voucherId: voucher.id,
-        accountId: expenseRef.id,
-        dr: new Prisma.Decimal(0),
-        cr: new Prisma.Decimal(otherCost),
-        memo: `PO ${po.poNo} extra cost`,
-      });
+    rows.push({
+      voucherId: voucher.id,
+      accountId: expenseRef.id,
+      dr: new Prisma.Decimal(0),
+      cr: new Prisma.Decimal(otherCost),
+      memo: `PO ${po.poNo} extra cost`,
+    });
+  }
+
+  await tx.voucherRow.createMany({ data: rows });
+  await postPurchaseAdvance(tx, po);
+
+  try {
+    for (const lid of createdLotIds) {
+      const sumRow: any = await tx.stockMove.aggregate({ where: { lotId: lid }, _sum: { qtyKg: true } });
+      const sumQty = Number(sumRow._sum?.qtyKg || 0);
+      const lotRow = await tx.lot.findUnique({ where: { id: lid }, select: { id: true, availableKg: true, label: true } });
+      if (lotRow) {
+        const old = Number(lotRow.availableKg || 0);
+        if (Math.abs(old - sumQty) > 0.00001) {
+          await tx.lot.update({ where: { id: lid }, data: { availableKg: new Prisma.Decimal(sumQty) } });
+          await tx.$executeRaw`
+            UPDATE "PurchaseOrder" SET remarks = COALESCE(remarks, '') || ${`\n[RECONCILE] Lot ${lotRow.label || lid}: adjusted ${old} -> ${sumQty}`} WHERE id = ${po.id}
+          `;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Reconciliation check failed for PO', po.id, String(e));
+  }
+
+  const updated = await tx.purchaseOrder.update({
+    where: { id: po.id },
+    data: { status: 'APPROVED' },
+    include: { items: true }
+  });
+
+  return {
+    purchaseOrder: updated,
+    totals: {
+      stockKg: totalStockKg,
+      basePurchase,
+      extraCosts,
+      totalCost,
+      productSummaries: costBreakdown.productSummaries,
+    },
+    voucherNo: voucher.voucherNo
+  };
+}
+
+export async function deletePurchaseOrder(
+  id: string,
+  input: { editPassword?: string },
+  userId?: string
+) {
+  const existing = await prisma.purchaseOrder.findUnique({
+    where: { id },
+    include: {
+      lots: { select: { id: true } }
+    }
+  });
+
+  if (!existing) {
+    throw new HttpError(404, 'Purchase order not found');
+  }
+
+  if (existing.status === 'APPROVED') {
+    await verifyConfirmedPurchasePassword(input.editPassword, userId, 'delete');
+    await validatePurchaseCanBeDeleted(id);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (existing.status === 'APPROVED') {
+      await reversePurchaseOrderImpact(tx, existing, userId);
     }
 
-    // FINAL INSERT
-    await tx.voucherRow.createMany({
-      data: rows,
-    });
-    await postPurchaseAdvance(tx, po);
+    await tx.purchaseOrder.delete({ where: { id } });
 
-    const updated = await tx.purchaseOrder.update({
-      where: { id: po.id },
-      data: { status: 'APPROVED' },
-      include: { items: true }
-    });
-
-    return {
-      purchaseOrder: updated,
-      totals: {
-        stockKg: totalStockKg,
-        basePurchase,
-        extraCosts,
-        totalCost,
-        productSummaries: costBreakdown.productSummaries,
-      },
-      voucherNo: voucher.voucherNo
-    };
+    return { id };
   });
 }

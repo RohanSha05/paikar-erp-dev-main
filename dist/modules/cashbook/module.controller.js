@@ -15,6 +15,11 @@ exports.resolvePartyAccountHandler = resolvePartyAccountHandler;
 exports.getAccounts = getAccounts;
 exports.createVoucherHandler = createVoucherHandler;
 exports.getVouchers = getVouchers;
+exports.getDraftVouchers = getDraftVouchers;
+exports.createDraftVoucherHandler = createDraftVoucherHandler;
+exports.updateDraftVoucherHandler = updateDraftVoucherHandler;
+exports.deleteDraftVoucherHandler = deleteDraftVoucherHandler;
+exports.approveDraftVoucherHandler = approveDraftVoucherHandler;
 const module_service_1 = require("./module.service");
 /**
  * GET /api/v1/cashbook/parties
@@ -121,10 +126,86 @@ function getVouchers(req, res, next) {
         try {
             const startDate = req.query.startDate;
             const endDate = req.query.endDate;
-            const vouchers = yield (0, module_service_1.listVouchers)(startDate, endDate);
+            const status = req.query.status;
+            const vouchers = yield (0, module_service_1.listVouchers)(startDate, endDate, status);
             res.json({
                 success: true,
                 data: vouchers,
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function getDraftVouchers(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const startDate = req.query.startDate;
+            const endDate = req.query.endDate;
+            const vouchers = yield (0, module_service_1.listDraftVouchers)(startDate, endDate);
+            res.json({
+                success: true,
+                data: vouchers,
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function createDraftVoucherHandler(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const voucher = yield (0, module_service_1.createDraftVoucher)(req.body);
+            res.status(201).json({
+                success: true,
+                data: voucher,
+                message: `Draft ${voucher.voucherNo} created successfully`,
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function updateDraftVoucherHandler(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const voucher = yield (0, module_service_1.updateDraftVoucher)(req.params.id, req.body);
+            res.json({
+                success: true,
+                data: voucher,
+                message: `Draft ${voucher.voucherNo} updated successfully`,
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function deleteDraftVoucherHandler(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            yield (0, module_service_1.deleteDraftVoucher)(req.params.id);
+            res.json({
+                success: true,
+                message: 'Draft deleted successfully',
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+}
+function approveDraftVoucherHandler(req, res, next) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const voucher = yield (0, module_service_1.approveDraftVoucher)(req.params.id);
+            res.json({
+                success: true,
+                data: voucher,
+                message: `Voucher ${voucher.voucherNo} approved successfully`,
             });
         }
         catch (error) {

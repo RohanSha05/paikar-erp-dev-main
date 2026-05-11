@@ -71,7 +71,9 @@ export const updatePurchaseOrderSchema = z.object({
   params: z.object({
     id: z.string().min(1)
   }),
-  body: createPurchaseOrderDraftSchema
+  body: createPurchaseOrderDraftSchema.extend({
+    editPassword: z.string().optional()
+  })
 });
 
 export const getPurchaseOrderSchema = z.object({
@@ -86,5 +88,17 @@ export const approvePurchaseOrderSchema = z.object({
   })
 });
 
+export const deletePurchaseOrderSchema = z.object({
+  params: z.object({
+    id: z.string().min(1)
+  }),
+  body: z.object({
+    editPassword: z.string().optional()
+  })
+});
+
 export type CreatePurchaseOrderDraftInput = z.infer<typeof createPurchaseOrderDraftSchema>;
-export type UpdatePurchaseOrderDraftInput = z.infer<typeof createPurchaseOrderDraftSchema>;
+export type UpdatePurchaseOrderDraftInput = z.infer<typeof createPurchaseOrderDraftSchema> & {
+  editPassword?: string;
+};
+export type DeletePurchaseOrderInput = z.infer<typeof deletePurchaseOrderSchema>['body'];

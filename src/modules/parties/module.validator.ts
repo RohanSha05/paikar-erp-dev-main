@@ -6,6 +6,8 @@ export const createPartySchema = z.object({
     district: z.string().max(120).optional(),
     market: z.string().max(120).optional(),
     phone: z.string().max(40).optional(),
+    paona: z.coerce.number().optional().default(0),
+    dena: z.coerce.number().optional().default(0),
 
     nidNumber: z.string().max(50).optional(),
     emergencyPhone: z.string().max(40).optional(),

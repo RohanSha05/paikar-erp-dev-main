@@ -8,6 +8,17 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __rest = (this && this.__rest) || function (s, e) {
+    var t = {};
+    for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+        t[p] = s[p];
+    if (s != null && typeof Object.getOwnPropertySymbols === "function")
+        for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+            if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                t[p[i]] = s[p[i]];
+        }
+    return t;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.listCustomers = listCustomers;
 exports.createCustomer = createCustomer;
@@ -25,16 +36,17 @@ function listCustomers() {
 }
 function createCustomer(input) {
     return __awaiter(this, void 0, void 0, function* () {
+        const { paona, dena } = input, customerData = __rest(input, ["paona", "dena"]);
         const customer = yield prisma_1.prisma.customer.create({
             data: {
-                name: input.name,
-                district: input.district,
-                market: input.market,
-                phone: input.phone,
-                address: input.address,
-                type: input.type || 'other',
-                nidNumber: input.nidNumber,
-                emergencyPhone: input.emergencyPhone,
+                name: customerData.name,
+                district: customerData.district,
+                market: customerData.market,
+                phone: customerData.phone,
+                address: customerData.address,
+                type: customerData.type || 'other',
+                nidNumber: customerData.nidNumber,
+                emergencyPhone: customerData.emergencyPhone,
             },
         });
         yield (0, party_account_1.ensurePartyAccount)({
@@ -42,6 +54,8 @@ function createCustomer(input) {
             refId: customer.id,
             name: customer.name,
             type: 'party',
+            openingDr: paona,
+            openingCr: dena,
         });
         return customer;
     });

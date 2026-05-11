@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.stockCardQuerySchema = exports.inventoryDashboardSchema = exports.transferStockSchema = exports.adjustStockSchema = void 0;
+exports.inventoryReportSchema = exports.stockCardQuerySchema = exports.inventoryDashboardSchema = exports.transferStockSchema = exports.adjustStockSchema = void 0;
 const zod_1 = require("zod");
 exports.adjustStockSchema = zod_1.z.object({
     body: zod_1.z.object({
@@ -40,5 +40,18 @@ exports.stockCardQuerySchema = zod_1.z.object({
         page: zod_1.z.coerce.number().int().min(1).optional().default(1),
         pageSize: zod_1.z.coerce.number().int().min(1).max(200).optional().default(50),
         sortDir: zod_1.z.enum(['asc', 'desc']).optional().default('asc')
+    })
+});
+exports.inventoryReportSchema = zod_1.z.object({
+    query: zod_1.z.object({
+        from: zod_1.z.string().regex(isoDateOnly, 'from must be YYYY-MM-DD').optional(),
+        to: zod_1.z.string().regex(isoDateOnly, 'to must be YYYY-MM-DD').optional(),
+        transactionType: zod_1.z.enum(['all', 'purchase', 'sale']).optional().default('all'),
+        partyId: zod_1.z.string().uuid().optional(),
+        warehouseId: zod_1.z.string().uuid().optional(),
+        productId: zod_1.z.string().uuid().optional(),
+        q: zod_1.z.string().trim().max(100).optional(),
+        page: zod_1.z.coerce.number().int().min(1).optional().default(1),
+        pageSize: zod_1.z.coerce.number().int().min(1).max(1000).optional().default(100),
     })
 });

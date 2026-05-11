@@ -8,6 +8,8 @@ exports.createPartySchema = zod_1.z.object({
         district: zod_1.z.string().max(120).optional(),
         market: zod_1.z.string().max(120).optional(),
         phone: zod_1.z.string().max(40).optional(),
+        paona: zod_1.z.coerce.number().optional().default(0),
+        dena: zod_1.z.coerce.number().optional().default(0),
         nidNumber: zod_1.z.string().max(50).optional(),
         emergencyPhone: zod_1.z.string().max(40).optional(),
         address: zod_1.z.string().max(255).optional(),

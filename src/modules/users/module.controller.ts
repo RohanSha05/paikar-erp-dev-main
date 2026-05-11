@@ -23,3 +23,8 @@ export async function update(req: Request, res: Response) {
 		data: user
 	});
 }
+
+export async function remove(req: Request, res: Response) {
+	await service.deleteUser(req.params.id);
+	return res.json({ success: true, message: 'User deleted' });
+}

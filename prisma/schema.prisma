@@ -79,6 +79,19 @@ enum StockRefType {
   ADJ
 }
 
+enum VoucherStatus {
+  DRAFT
+  POSTED
+  RECONCILED
+}
+
+enum AuditActionType {
+  CREATE
+  UPDATE
+  DELETE
+  REVERSE
+}
+
 enum PartyType {
   CUSTOMER
   SELLER
@@ -454,11 +467,21 @@ model Voucher {
   purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
   salesOrderId    String?
   locked          Boolean        @default(false)
+  status          VoucherStatus  @default(DRAFT)
+  userId          String?
+  postedAt        DateTime?
+  deletedAt       DateTime?
   createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
-  rows            VoucherRow[]
+  rows                  VoucherRow[]
+  auditLogs             AuditLog[]
+  originalReversal      VoucherReversal? @relation("OriginalVoucher")
+  reversingVoucher      VoucherReversal? @relation("ReversingVoucher")
 
-  @@index([vdate])
+  @@index([vdate, status])
+  @@index([status, createdAt])
+  @@index([deletedAt])
 }
 
 model VoucherRow {
@@ -508,4 +531,33 @@ model RecurringExpensePost {
   postedAt   DateTime @default(now())
 
   @@unique([templateId, year, month])
+}
+
+model AuditLog {
+  id            String           @id @default(uuid())
+  voucherId     String
+  voucher       Voucher          @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  action        AuditActionType
+  userId        String?
+  userName      String?
+  changes       Json?
+  reason        String?
+  createdAt     DateTime         @default(now())
+
+  @@index([voucherId, createdAt])
+  @@index([createdAt])
+}
+
+model VoucherReversal {
+  id                    String   @id @default(uuid())
+  originalVoucherId     String   @unique
+  originalVoucher       Voucher  @relation("OriginalVoucher", fields: [originalVoucherId], references: [id], onDelete: Cascade)
+  reversingVoucherId    String   @unique
+  reversingVoucher      Voucher  @relation("ReversingVoucher", fields: [reversingVoucherId], references: [id], onDelete: Cascade)
+  reason                String?
+  createdBy             String?
+  createdAt             DateTime @default(now())
+
+  @@index([originalVoucherId])
+  @@index([reversingVoucherId])
 }

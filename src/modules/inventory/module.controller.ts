@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import * as service from './module.service';
 import { InventoryDashboardQuery, StockCardQuery } from './module.types';
+import { InventoryReportQuery } from './module.types';
 
 function firstString(value: unknown): string | undefined {
 	if (typeof value === 'string') {
@@ -67,6 +68,31 @@ function parseStockCardQuery(query: Request['query']): StockCardQuery {
 	};
 }
 
+function parseReportQuery(query: Request['query']): InventoryReportQuery {
+	const ttRaw = firstString(query.transactionType);
+	const transactionType: 'all' | 'purchase' | 'sale' =
+		ttRaw === 'purchase' || ttRaw === 'sale' ? ttRaw : 'all';
+
+	function toPositiveIntLocal(value: unknown, fallback: number): number {
+		const text = firstString(value);
+		if (!text) return fallback;
+		const n = Number(text);
+		return Number.isInteger(n) && n > 0 ? n : fallback;
+	}
+
+	return {
+		from: firstString(query.from),
+		to: firstString(query.to),
+		transactionType,
+		partyId: firstString(query.partyId),
+		warehouseId: firstString(query.warehouseId),
+		productId: firstString(query.productId),
+		q: firstString(query.q),
+		page: toPositiveIntLocal(query.page, 1),
+		pageSize: toPositiveIntLocal(query.pageSize, 100),
+	};
+}
+
 export async function adjust(req: Request, res: Response) {
 	const data = await service.adjustStock(req.body);
 	return res.json({
@@ -94,6 +120,15 @@ export async function dashboard(req: Request, res: Response) {
 	});
 }
 
+export async function report(req: Request, res: Response) {
+	const data = await service.getInventoryReport(parseReportQuery(req.query));
+	return res.json({
+		success: true,
+		message: 'Inventory report loaded',
+		data
+	});
+}
+
 export async function stockCard(req: Request, res: Response) {
 	const data = await service.getStockCard(parseStockCardQuery(req.query));
 	return res.json({
@@ -101,4 +136,9 @@ export async function stockCard(req: Request, res: Response) {
 		message: 'Stock card data loaded',
 		data
 	});
+}
+
+export async function reconcile(req: Request, res: Response) {
+  const data = await service.reconcileAllLots();
+  return res.json({ success: true, message: 'Reconciliation complete', data });
 }

@@ -6,7 +6,8 @@ import {
   approvePurchaseOrderSchema,
   createPurchaseOrderSchema,
   getPurchaseOrderSchema,
-  updatePurchaseOrderSchema
+  updatePurchaseOrderSchema,
+  deletePurchaseOrderSchema
 } from './purchase.validator';
 
 const router = Router();
@@ -36,6 +37,14 @@ router.post(
   requireRole(['ADMIN']),
   validate(approvePurchaseOrderSchema),
   controller.approve
+);
+
+router.delete(
+  '/:id',
+  requireAuth,
+  requireRole(['ADMIN']),
+  validate(deletePurchaseOrderSchema),
+  controller.deletePurchaseOrder
 );
 
 export default router;

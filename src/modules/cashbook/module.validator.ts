@@ -37,4 +37,14 @@ export const createVoucherSchema = z.object({
   }),
 });
 
+export const createDraftVoucherSchema = createVoucherSchema;
+
+export const updateDraftVoucherSchema = createVoucherSchema;
+
+export const draftVoucherParamsSchema = z.object({
+  params: z.object({
+    id: z.string().trim().min(1, { message: 'Invalid voucher ID' }),
+  }),
+});
+
 export type CreateVoucherInput = z.infer<typeof createVoucherSchema>;

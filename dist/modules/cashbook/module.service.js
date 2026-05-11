@@ -14,8 +14,13 @@ exports.listParties = listParties;
 exports.resolvePartyAccount = resolvePartyAccount;
 exports.listAccounts = listAccounts;
 exports.createVoucher = createVoucher;
+exports.createDraftVoucher = createDraftVoucher;
 exports.getVoucherById = getVoucherById;
 exports.listVouchers = listVouchers;
+exports.listDraftVouchers = listDraftVouchers;
+exports.updateDraftVoucher = updateDraftVoucher;
+exports.deleteDraftVoucher = deleteDraftVoucher;
+exports.approveDraftVoucher = approveDraftVoucher;
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
 const party_account_1 = require("../accounting/party-account");
@@ -501,6 +506,73 @@ function resolveVoucherRowAccounts(rows) {
 function round2(value) {
     return Math.round(value * 100) / 100;
 }
+function parseVoucherDate(vdate) {
+    const parsed = new Date(`${vdate}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) {
+        throw new httpError_1.HttpError(400, 'Invalid date format');
+    }
+    return parsed;
+}
+function buildVoucherRows(rows) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const normalizedRows = rows.map((row) => ({
+            accountId: row.accountId,
+            dr: Number(row.dr || 0),
+            cr: Number(row.cr || 0),
+            memo: row.memo,
+        }));
+        const totalDr = round2(normalizedRows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
+        const totalCr = round2(normalizedRows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
+        const diff = round2(totalDr - totalCr);
+        if (Math.abs(diff) > 0.01) {
+            throw new httpError_1.HttpError(400, `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`);
+        }
+        if (Math.abs(diff) > 0) {
+            const roundingAccountId = yield ensureRoundingAccountId();
+            normalizedRows.push(diff > 0
+                ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
+                : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' });
+        }
+        return resolveVoucherRowAccounts(normalizedRows);
+    });
+}
+function createVoucherRecord(input, status) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!Array.isArray(input.rows) || input.rows.length === 0) {
+            throw new httpError_1.HttpError(400, 'Voucher must contain at least one row');
+        }
+        const resolvedRows = yield buildVoucherRows(input.rows);
+        const voucherNo = yield generateVoucherNumber(input.vdate);
+        const vdate = parseVoucherDate(input.vdate);
+        const voucher = yield prisma_1.prisma.voucher.create({
+            data: {
+                voucherNo,
+                vtype: input.vtype,
+                vdate,
+                narration: input.narration || `${input.vtype} voucher`,
+                status,
+                postedAt: status === 'POSTED' ? new Date() : null,
+                locked: status === 'POSTED',
+                rows: {
+                    create: resolvedRows.map((row) => ({
+                        accountId: row.accountId,
+                        dr: row.dr || 0,
+                        cr: row.cr || 0,
+                        memo: row.memo,
+                    })),
+                },
+            },
+            include: {
+                rows: {
+                    include: {
+                        account: true,
+                    },
+                },
+            },
+        });
+        return mapVoucherToDto(voucher);
+    });
+}
 function ensureRoundingAccountId() {
     return __awaiter(this, void 0, void 0, function* () {
         const account = yield prisma_1.prisma.account.upsert({
@@ -523,72 +595,12 @@ function ensureRoundingAccountId() {
  */
 function createVoucher(input) {
     return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
-        if (!Array.isArray(input.rows) || input.rows.length === 0) {
-            throw new httpError_1.HttpError(400, 'Voucher must contain at least one row');
-        }
-        const rows = input.rows.map((row) => ({
-            accountId: row.accountId,
-            dr: Number(row.dr || 0),
-            cr: Number(row.cr || 0),
-            memo: row.memo,
-        }));
-        // Debug log for payment vouchers
-        if (((_a = input.narration) === null || _a === void 0 ? void 0 : _a.includes('payment')) || ((_b = input.narration) === null || _b === void 0 ? void 0 : _b.includes('receipt'))) {
-            console.log('🔍 Settlement voucher:', {
-                narration: input.narration,
-                rows: rows.map((r) => ({
-                    dr: r.dr,
-                    cr: r.cr,
-                    memo: r.memo,
-                })),
-            });
-        }
-        const totalDr = round2(rows.reduce((sum, row) => sum + Number(row.dr || 0), 0));
-        const totalCr = round2(rows.reduce((sum, row) => sum + Number(row.cr || 0), 0));
-        const diff = round2(totalDr - totalCr);
-        if (Math.abs(diff) > 0.01) {
-            throw new httpError_1.HttpError(400, `Debit/Credit must be equal (DR=${totalDr}, CR=${totalCr}, diff=${diff})`);
-        }
-        if (Math.abs(diff) > 0) {
-            const roundingAccountId = yield ensureRoundingAccountId();
-            rows.push(diff > 0
-                ? { accountId: roundingAccountId, dr: 0, cr: Math.abs(diff), memo: 'Auto rounding (CR)' }
-                : { accountId: roundingAccountId, dr: Math.abs(diff), cr: 0, memo: 'Auto rounding (DR)' });
-        }
-        const resolvedRows = yield resolveVoucherRowAccounts(rows);
-        // Generate voucher number
-        const voucherNo = yield generateVoucherNumber(input.vdate);
-        // Parse date to ensure it's valid
-        const vdate = new Date(input.vdate + 'T00:00:00Z');
-        if (isNaN(vdate.getTime())) {
-            throw new httpError_1.HttpError(400, 'Invalid date format');
-        }
-        // Create voucher with rows in a transaction
-        const voucher = yield prisma_1.prisma.voucher.create({
-            data: {
-                voucherNo,
-                vtype: input.vtype,
-                vdate,
-                narration: input.narration || `${input.vtype} voucher`,
-                rows: {
-                    create: resolvedRows.map((row) => ({
-                        accountId: row.accountId,
-                        dr: row.dr || 0,
-                        cr: row.cr || 0,
-                        memo: row.memo,
-                    })),
-                },
-            },
-            include: {
-                rows: {
-                    include: {
-                        account: true,
-                    },
-                },
-            },
-        });
-        return mapVoucherToDto(voucher);
+        return createVoucherRecord(input, 'POSTED');
+    });
+}
+function createDraftVoucher(input) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return createVoucherRecord(input, 'DRAFT');
     });
 }
 /**
@@ -615,14 +627,21 @@ function getVoucherById(id) {
 /**
  * List vouchers with optional date range filter
  */
-function listVouchers(startDate, endDate) {
+function listVouchers(startDate, endDate, status) {
     return __awaiter(this, void 0, void 0, function* () {
         const where = {};
         if (startDate) {
-            where.vdate = Object.assign(Object.assign({}, where.vdate), { gte: new Date(startDate + 'T00:00:00Z') });
+            where.vdate = Object.assign(Object.assign({}, where.vdate), { gte: new Date(`${startDate}T00:00:00Z`) });
         }
         if (endDate) {
-            where.vdate = Object.assign(Object.assign({}, where.vdate), { lte: new Date(endDate + 'T23:59:59Z') });
+            where.vdate = Object.assign(Object.assign({}, where.vdate), { lte: new Date(`${endDate}T23:59:59Z`) });
+        }
+        if (status) {
+            where.status = status;
+        }
+        else {
+            // Default voucher list should not include unapproved drafts.
+            where.NOT = { status: 'DRAFT' };
         }
         const vouchers = yield prisma_1.prisma.voucher.findMany({
             where,
@@ -640,6 +659,92 @@ function listVouchers(startDate, endDate) {
         return vouchers.map(mapVoucherToDto);
     });
 }
+function listDraftVouchers(startDate, endDate) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return listVouchers(startDate, endDate, 'DRAFT');
+    });
+}
+function updateDraftVoucher(id, input) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const existing = yield prisma_1.prisma.voucher.findUnique({
+            where: { id },
+            select: { id: true, status: true },
+        });
+        if (!existing || existing.status !== 'DRAFT') {
+            throw new httpError_1.HttpError(404, 'Draft voucher not found');
+        }
+        const resolvedRows = yield buildVoucherRows(input.rows);
+        const vdate = parseVoucherDate(input.vdate);
+        const voucher = yield prisma_1.prisma.$transaction((tx) => __awaiter(this, void 0, void 0, function* () {
+            yield tx.voucherRow.deleteMany({ where: { voucherId: id } });
+            return tx.voucher.update({
+                where: { id },
+                data: {
+                    vtype: input.vtype,
+                    vdate,
+                    narration: input.narration || `${input.vtype} voucher`,
+                    postedAt: null,
+                    locked: false,
+                    rows: {
+                        create: resolvedRows.map((row) => ({
+                            accountId: row.accountId,
+                            dr: row.dr || 0,
+                            cr: row.cr || 0,
+                            memo: row.memo,
+                        })),
+                    },
+                },
+                include: {
+                    rows: {
+                        include: {
+                            account: true,
+                        },
+                    },
+                },
+            });
+        }));
+        return mapVoucherToDto(voucher);
+    });
+}
+function deleteDraftVoucher(id) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const existing = yield prisma_1.prisma.voucher.findUnique({
+            where: { id },
+            select: { id: true, status: true },
+        });
+        if (!existing || existing.status !== 'DRAFT') {
+            throw new httpError_1.HttpError(404, 'Draft voucher not found');
+        }
+        yield prisma_1.prisma.voucher.delete({ where: { id } });
+    });
+}
+function approveDraftVoucher(id) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const existing = yield prisma_1.prisma.voucher.findUnique({
+            where: { id },
+            select: { id: true, status: true },
+        });
+        if (!existing || existing.status !== 'DRAFT') {
+            throw new httpError_1.HttpError(404, 'Draft voucher not found');
+        }
+        const voucher = yield prisma_1.prisma.voucher.update({
+            where: { id },
+            data: {
+                status: 'POSTED',
+                postedAt: new Date(),
+                locked: true,
+            },
+            include: {
+                rows: {
+                    include: {
+                        account: true,
+                    },
+                },
+            },
+        });
+        return mapVoucherToDto(voucher);
+    });
+}
 /**
  * Helper to map Prisma voucher to DTO
  */
@@ -650,6 +755,9 @@ function mapVoucherToDto(voucher) {
         vtype: voucher.vtype,
         vdate: voucher.vdate.toISOString().split('T')[0],
         narration: voucher.narration,
+        status: voucher.status,
+        postedAt: voucher.postedAt ? voucher.postedAt.toISOString() : null,
+        deletedAt: voucher.deletedAt ? voucher.deletedAt.toISOString() : null,
         rows: voucher.rows.map((row) => ({
             id: row.id,
             accountId: row.accountId,
@@ -660,9 +768,7 @@ function mapVoucherToDto(voucher) {
                     name: row.account.name,
                     type: row.account.type,
                     active: row.account.active,
-                    opening: row.account.opening
-                        ? Number(row.account.opening)
-                        : 0,
+                    opening: row.account.opening ? Number(row.account.opening) : 0,
                 }
                 : undefined,
             dr: Number(row.dr),
@@ -670,5 +776,6 @@ function mapVoucherToDto(voucher) {
             memo: row.memo,
         })),
         createdAt: voucher.createdAt.toISOString(),
+        updatedAt: voucher.updatedAt ? voucher.updatedAt.toISOString() : undefined,
     };
 }

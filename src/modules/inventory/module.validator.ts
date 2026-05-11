@@ -44,3 +44,17 @@ export const stockCardQuerySchema = z.object({
 		sortDir: z.enum(['asc', 'desc']).optional().default('asc')
 	})
 });
+
+export const inventoryReportSchema = z.object({
+	query: z.object({
+		from: z.string().regex(isoDateOnly, 'from must be YYYY-MM-DD').optional(),
+		to: z.string().regex(isoDateOnly, 'to must be YYYY-MM-DD').optional(),
+		transactionType: z.enum(['all', 'purchase', 'sale']).optional().default('all'),
+		partyId: z.string().uuid().optional(),
+		warehouseId: z.string().uuid().optional(),
+		productId: z.string().uuid().optional(),
+		q: z.string().trim().max(100).optional(),
+		page: z.coerce.number().int().min(1).optional().default(1),
+		pageSize: z.coerce.number().int().min(1).max(1000).optional().default(100),
+	})
+});

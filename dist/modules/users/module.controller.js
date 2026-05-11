@@ -45,6 +45,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.list = list;
 exports.create = create;
 exports.update = update;
+exports.remove = remove;
 const service = __importStar(require("./module.service"));
 function list(_req, res) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -70,5 +71,11 @@ function update(req, res) {
             message: 'User updated',
             data: user
         });
+    });
+}
+function remove(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        yield service.deleteUser(req.params.id);
+        return res.json({ success: true, message: 'User deleted' });
     });
 }

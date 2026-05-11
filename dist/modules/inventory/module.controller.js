@@ -45,7 +45,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.adjust = adjust;
 exports.transfer = transfer;
 exports.dashboard = dashboard;
+exports.report = report;
 exports.stockCard = stockCard;
+exports.reconcile = reconcile;
 const service = __importStar(require("./module.service"));
 function firstString(value) {
     if (typeof value === 'string') {
@@ -107,6 +109,28 @@ function parseStockCardQuery(query) {
         sortDir,
     };
 }
+function parseReportQuery(query) {
+    const ttRaw = firstString(query.transactionType);
+    const transactionType = ttRaw === 'purchase' || ttRaw === 'sale' ? ttRaw : 'all';
+    function toPositiveIntLocal(value, fallback) {
+        const text = firstString(value);
+        if (!text)
+            return fallback;
+        const n = Number(text);
+        return Number.isInteger(n) && n > 0 ? n : fallback;
+    }
+    return {
+        from: firstString(query.from),
+        to: firstString(query.to),
+        transactionType,
+        partyId: firstString(query.partyId),
+        warehouseId: firstString(query.warehouseId),
+        productId: firstString(query.productId),
+        q: firstString(query.q),
+        page: toPositiveIntLocal(query.page, 1),
+        pageSize: toPositiveIntLocal(query.pageSize, 100),
+    };
+}
 function adjust(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const data = yield service.adjustStock(req.body);
@@ -137,6 +161,16 @@ function dashboard(req, res) {
         });
     });
 }
+function report(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.getInventoryReport(parseReportQuery(req.query));
+        return res.json({
+            success: true,
+            message: 'Inventory report loaded',
+            data
+        });
+    });
+}
 function stockCard(req, res) {
     return __awaiter(this, void 0, void 0, function* () {
         const data = yield service.getStockCard(parseStockCardQuery(req.query));
@@ -145,5 +179,11 @@ function stockCard(req, res) {
             message: 'Stock card data loaded',
             data
         });
+    });
+}
+function reconcile(req, res) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const data = yield service.reconcileAllLots();
+        return res.json({ success: true, message: 'Reconciliation complete', data });
     });
 }

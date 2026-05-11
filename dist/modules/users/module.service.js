@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.listUsers = listUsers;
 exports.createUser = createUser;
 exports.updateUser = updateUser;
+exports.deleteUser = deleteUser;
 const bcrypt_1 = __importDefault(require("bcrypt"));
 const prisma_1 = require("../../db/prisma");
 const httpError_1 = require("../../common/httpError");
@@ -85,5 +86,19 @@ function updateUser(id, input) {
                 updatedAt: true
             }
         });
+    });
+}
+function deleteUser(id) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // Find the oldest user — they cannot be deleted
+        const oldest = yield prisma_1.prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
+        if ((oldest === null || oldest === void 0 ? void 0 : oldest.id) === id) {
+            throw new httpError_1.HttpError(403, 'The first user cannot be deleted');
+        }
+        const user = yield prisma_1.prisma.user.findUnique({ where: { id } });
+        if (!user) {
+            throw new httpError_1.HttpError(404, 'User not found');
+        }
+        return prisma_1.prisma.user.delete({ where: { id } });
     });
 }

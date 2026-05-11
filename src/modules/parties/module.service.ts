@@ -10,12 +10,15 @@ export async function listParties() {
 }
 
 export async function createParty(input: CreatePartyInput) {
-	const seller = await prisma.seller.create({ data: input });
+	const { paona, dena, ...sellerData } = input;
+	const seller = await prisma.seller.create({ data: sellerData });
 	await ensurePartyAccount({
 		kind: 'seller',
 		refId: seller.id,
 		name: seller.name,
 		type: 'party',
+		openingDr: paona,
+		openingCr: dena,
 	});
 	return seller;
 }

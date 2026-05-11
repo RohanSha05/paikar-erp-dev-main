@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.approvePurchaseOrderSchema = exports.getPurchaseOrderSchema = exports.updatePurchaseOrderSchema = exports.createPurchaseOrderSchema = exports.createPurchaseOrderDraftSchema = void 0;
+exports.deletePurchaseOrderSchema = exports.approvePurchaseOrderSchema = exports.getPurchaseOrderSchema = exports.updatePurchaseOrderSchema = exports.createPurchaseOrderSchema = exports.createPurchaseOrderDraftSchema = void 0;
 const zod_1 = require("zod");
 const sellerSnapshotSchema = zod_1.z.object({
     id: zod_1.z.string().min(1),
@@ -61,7 +61,9 @@ exports.updatePurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
         id: zod_1.z.string().min(1)
     }),
-    body: exports.createPurchaseOrderDraftSchema
+    body: exports.createPurchaseOrderDraftSchema.extend({
+        editPassword: zod_1.z.string().optional()
+    })
 });
 exports.getPurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
@@ -71,5 +73,13 @@ exports.getPurchaseOrderSchema = zod_1.z.object({
 exports.approvePurchaseOrderSchema = zod_1.z.object({
     params: zod_1.z.object({
         id: zod_1.z.string().min(1)
+    })
+});
+exports.deletePurchaseOrderSchema = zod_1.z.object({
+    params: zod_1.z.object({
+        id: zod_1.z.string().min(1)
+    }),
+    body: zod_1.z.object({
+        editPassword: zod_1.z.string().optional()
     })
 });
