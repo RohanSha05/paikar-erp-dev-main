@@ -561,3 +561,17 @@ model VoucherReversal {
   @@index([originalVoucherId])
   @@index([reversingVoucherId])
 }
+
+model BusinessInfo {
+  id                    String   @id @default(uuid())
+  businessName          String?
+  proprietorName        String?
+  additionalProprietor  String?
+  address               String?
+  phone1                String?
+  phone2                String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([createdAt])
+}

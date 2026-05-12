@@ -18,6 +18,7 @@ import cashbookRoutes from '../modules/cashbook/module.routes';
 import investorRoutes from '../modules/investors/module.routes';
 import reportsRoutes from '../modules/reports/module.routes';
 import retailPurchaseDraftRoutes from '../modules/retail-purchase-draft/retailPurchaseDraft.routes';
+import businessInfoRoutes from '../modules/business-info/module.routes';
 
 const router = Router();
 
@@ -44,5 +45,6 @@ router.use('/cashbook', cashbookRoutes);
 router.use('/investors', investorRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/retail-purchase-drafts', retailPurchaseDraftRoutes);
+router.use('/business-info', businessInfoRoutes);
 
 export default router;

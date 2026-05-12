@@ -20,6 +20,12 @@ CREATE TYPE "StockMoveReason" AS ENUM ('PURCHASE', 'SALE', 'TRANSFER', 'ADJUSTME
 CREATE TYPE "StockRefType" AS ENUM ('PO', 'SO', 'TRF', 'ADJ');
 
 -- CreateEnum
+CREATE TYPE "VoucherStatus" AS ENUM ('DRAFT', 'POSTED', 'RECONCILED');
+
+-- CreateEnum
+CREATE TYPE "AuditActionType" AS ENUM ('CREATE', 'UPDATE', 'DELETE', 'REVERSE');
+
+-- CreateEnum
 CREATE TYPE "PartyType" AS ENUM ('CUSTOMER', 'SELLER', 'MILL', 'DRIVER', 'INVESTOR', 'EMPLOYEE', 'OTHER');
 
 -- CreateTable
@@ -73,6 +79,8 @@ CREATE TABLE "Seller" (
     "district" TEXT,
     "market" TEXT,
     "phone" TEXT,
+    "nidNumber" TEXT,
+    "emergencyPhone" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -121,6 +129,8 @@ CREATE TABLE "Customer" (
     "market" TEXT,
     "phone" TEXT,
     "type" TEXT,
+    "nidNumber" TEXT,
+    "emergencyPhone" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -178,6 +188,7 @@ CREATE TABLE "PurchaseOrder" (
     "status" "PurchaseStatus" NOT NULL DEFAULT 'DRAFT',
     "purchaseType" TEXT,
     "sellerId" TEXT NOT NULL,
+    "sellerSnapshot" JSONB,
     "warehouseId" TEXT NOT NULL,
     "transport" DECIMAL(18,4) NOT NULL,
     "loading" DECIMAL(18,4) NOT NULL,
@@ -369,7 +380,12 @@ CREATE TABLE "Voucher" (
     "purchaseOrderId" TEXT,
     "salesOrderId" TEXT,
     "locked" BOOLEAN NOT NULL DEFAULT false,
+    "status" "VoucherStatus" NOT NULL DEFAULT 'DRAFT',
+    "userId" TEXT,
+    "postedAt" TIMESTAMP(3),
+    "deletedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Voucher_pkey" PRIMARY KEY ("id")
 );
@@ -416,6 +432,47 @@ CREATE TABLE "RecurringExpensePost" (
     "postedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "RecurringExpensePost_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AuditLog" (
+    "id" TEXT NOT NULL,
+    "voucherId" TEXT NOT NULL,
+    "action" "AuditActionType" NOT NULL,
+    "userId" TEXT,
+    "userName" TEXT,
+    "changes" JSONB,
+    "reason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VoucherReversal" (
+    "id" TEXT NOT NULL,
+    "originalVoucherId" TEXT NOT NULL,
+    "reversingVoucherId" TEXT NOT NULL,
+    "reason" TEXT,
+    "createdBy" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "VoucherReversal_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "BusinessInfo" (
+    "id" TEXT NOT NULL,
+    "businessName" TEXT,
+    "proprietorName" TEXT,
+    "additionalProprietor" TEXT,
+    "address" TEXT,
+    "phone1" TEXT,
+    "phone2" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "BusinessInfo_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -524,7 +581,13 @@ CREATE INDEX "InvestorTxn_createdAt_idx" ON "InvestorTxn"("createdAt");
 CREATE UNIQUE INDEX "Voucher_voucherNo_key" ON "Voucher"("voucherNo");
 
 -- CreateIndex
-CREATE INDEX "Voucher_vdate_idx" ON "Voucher"("vdate");
+CREATE INDEX "Voucher_vdate_status_idx" ON "Voucher"("vdate", "status");
+
+-- CreateIndex
+CREATE INDEX "Voucher_status_createdAt_idx" ON "Voucher"("status", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Voucher_deletedAt_idx" ON "Voucher"("deletedAt");
 
 -- CreateIndex
 CREATE INDEX "VoucherRow_accountId_idx" ON "VoucherRow"("accountId");
@@ -534,6 +597,27 @@ CREATE INDEX "RecurringExpenseTemplate_active_idx" ON "RecurringExpenseTemplate"
 
 -- CreateIndex
 CREATE UNIQUE INDEX "RecurringExpensePost_templateId_year_month_key" ON "RecurringExpensePost"("templateId", "year", "month");
+
+-- CreateIndex
+CREATE INDEX "AuditLog_voucherId_createdAt_idx" ON "AuditLog"("voucherId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "VoucherReversal_originalVoucherId_key" ON "VoucherReversal"("originalVoucherId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "VoucherReversal_reversingVoucherId_key" ON "VoucherReversal"("reversingVoucherId");
+
+-- CreateIndex
+CREATE INDEX "VoucherReversal_originalVoucherId_idx" ON "VoucherReversal"("originalVoucherId");
+
+-- CreateIndex
+CREATE INDEX "VoucherReversal_reversingVoucherId_idx" ON "VoucherReversal"("reversingVoucherId");
+
+-- CreateIndex
+CREATE INDEX "BusinessInfo_createdAt_idx" ON "BusinessInfo"("createdAt");
 
 -- AddForeignKey
 ALTER TABLE "RetailPurchaseDraft" ADD CONSTRAINT "RetailPurchaseDraft_sellerId_fkey" FOREIGN KEY ("sellerId") REFERENCES "Seller"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -546,6 +630,9 @@ ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_sellerId_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PurchaseOrder" ADD CONSTRAINT "PurchaseOrder_destinationCustomerId_fkey" FOREIGN KEY ("destinationCustomerId") REFERENCES "Customer"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PurchaseOrderItem" ADD CONSTRAINT "PurchaseOrderItem_purchaseOrderId_fkey" FOREIGN KEY ("purchaseOrderId") REFERENCES "PurchaseOrder"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -594,3 +681,12 @@ ALTER TABLE "VoucherRow" ADD CONSTRAINT "VoucherRow_accountId_fkey" FOREIGN KEY 
 
 -- AddForeignKey
 ALTER TABLE "RecurringExpensePost" ADD CONSTRAINT "RecurringExpensePost_templateId_fkey" FOREIGN KEY ("templateId") REFERENCES "RecurringExpenseTemplate"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_voucherId_fkey" FOREIGN KEY ("voucherId") REFERENCES "Voucher"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VoucherReversal" ADD CONSTRAINT "VoucherReversal_originalVoucherId_fkey" FOREIGN KEY ("originalVoucherId") REFERENCES "Voucher"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VoucherReversal" ADD CONSTRAINT "VoucherReversal_reversingVoucherId_fkey" FOREIGN KEY ("reversingVoucherId") REFERENCES "Voucher"("id") ON DELETE CASCADE ON UPDATE CASCADE;
