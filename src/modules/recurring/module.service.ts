@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { dhakaDayStart, tzDate, tzDateTime } from '../../common/utils/date';
 import type {
 	CreateRecurringTemplateInput,
 	RecurringTemplateDto,
@@ -23,9 +24,9 @@ function toDto(template: any): RecurringTemplateDto {
 		dayOfMonth: template.dayOfMonth || undefined,
 		active: template.active,
 		notes: template.notes || undefined,
-		lastPostedDate: template.lastPostedDate ? template.lastPostedDate.toISOString().slice(0, 10) : undefined,
-		createdAt: template.createdAt.toISOString(),
-		updatedAt: template.updatedAt.toISOString(),
+		lastPostedDate: template.lastPostedDate ? tzDate(template.lastPostedDate) : undefined,
+		createdAt: tzDateTime(template.createdAt),
+		updatedAt: tzDateTime(template.updatedAt),
 	};
 }
 
@@ -83,8 +84,14 @@ export async function deleteRecurringTemplate(id: string) {
 
 function monthDate(year: number, month: number, dayOfMonth?: number) {
 	const day = Math.min(Math.max(dayOfMonth || 1, 1), 31);
-	const date = new Date(Date.UTC(year, month - 1, day));
-	return date.toISOString().slice(0, 10);
+	const mm = String(month).padStart(2, '0');
+	const dd = String(day).padStart(2, '0');
+	return `${year}-${mm}-${dd}`;
+}
+
+function normalizePostDate(postDate?: string) {
+	const value = postDate?.trim();
+	return value ? dhakaDayStart(value) : null;
 }
 
 async function resolveAccountIdByCodeOrId(tx: Prisma.TransactionClient, value: string) {
@@ -107,7 +114,7 @@ async function resolveAccountIdByCodeOrId(tx: Prisma.TransactionClient, value: s
 	return account.id;
 }
 
-export async function postRecurringTemplate(id: string, year: number, month: number) {
+export async function postRecurringTemplate(id: string, year: number, month: number, postDate?: string) {
 	return prisma.$transaction(async (tx) => {
 		const template = await tx.recurringExpenseTemplate.findUnique({ where: { id } });
 		if (!template) {
@@ -127,15 +134,15 @@ export async function postRecurringTemplate(id: string, year: number, month: num
 
 		const expenseAccountId = await resolveAccountIdByCodeOrId(tx, template.expenseAccountId);
 		const payFromAccountId = await resolveAccountIdByCodeOrId(tx, template.payFromAccountId);
-		const voucherDateText = monthDate(year, month, template.dayOfMonth || 1);
-		const voucherDate = new Date(`${voucherDateText}T00:00:00.000Z`);
+		const voucherDate = normalizePostDate(postDate) || dhakaDayStart(monthDate(year, month, template.dayOfMonth || 1));
 
 		const voucher = await tx.voucher.create({
 			data: {
 				voucherNo: await nextDailySequenceIdForDelegate(tx.voucher, 'voucherNo', 'VCH', voucherDate),
-				vtype: 'journal',
+				vtype: 'payment',
 				vdate: voucherDate,
 				narration: `Recurring: ${template.name}`,
+				status: 'POSTED'
 			},
 		});
 
@@ -170,7 +177,7 @@ export async function postRecurringTemplate(id: string, year: number, month: num
 
 		await tx.recurringExpenseTemplate.update({
 			where: { id: template.id },
-			data: { lastPostedDate: new Date() },
+			data: { lastPostedDate: voucherDate },
 		});
 
 		return {

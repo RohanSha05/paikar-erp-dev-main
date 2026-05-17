@@ -8,8 +8,34 @@ import { env } from './config/env';
 import { logger } from './config/logger';
 import apiRouter from './routes';
 import { errorHandler } from './common/middleware/errorHandler';
+import { tzDateTime } from './common/utils/date';
+process.env.TZ = env.TIMEZONE;
+
+function serializeDhakaDates(value: unknown): unknown {
+  if (value instanceof Date) {
+    return tzDateTime(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(serializeDhakaDates);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, serializeDhakaDates(nested)]),
+    );
+  }
+
+  return value;
+}
 
 export const app = express();
+
+app.use((_req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = ((body: unknown) => json(serializeDhakaDates(body))) as typeof res.json;
+  next();
+});
 
 app.use(
   cors({

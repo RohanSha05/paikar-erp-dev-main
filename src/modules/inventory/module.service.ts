@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { dhakaDayEnd, dhakaDayStart } from '../../common/utils/date';
 import {
 	AdjustStockInput,
 	TransferStockInput,
@@ -68,6 +69,7 @@ async function createInventoryVoucher(
 			vtype: 'journal',
 			vdate: input.vdate,
 			narration: input.narration,
+			status: 'POSTED'
 		},
 	});
 
@@ -294,11 +296,11 @@ export async function transferStock(input: TransferStockInput) {
 }
 
 function dateStart(dateText: string) {
-	return new Date(`${dateText}T00:00:00.000Z`);
+	return dhakaDayStart(dateText);
 }
 
 function dateEnd(dateText: string) {
-	return new Date(`${dateText}T23:59:59.999Z`);
+	return dhakaDayEnd(dateText);
 }
 
 function toNumber(v: unknown) {

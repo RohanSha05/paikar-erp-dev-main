@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as service from './module.service';
+import { tzDate } from '../../common/utils/date';
 import { HttpError } from '../../common/httpError';
 
 export async function list(req: Request, res: Response, next: any) {
@@ -103,7 +104,7 @@ export async function postTxn(req: Request, res: Response, next: any) {
       throw new HttpError(400, 'Amount must be positive');
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = tzDate(new Date());
     const txn = await service.createInvestorTxn({
       investorId: req.params.id,
       kind,

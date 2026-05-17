@@ -112,7 +112,7 @@ function getReportMeta() {
                 latestVoucherYear: null,
             };
         }
-        const latestDate = latestVoucher.vdate.toISOString().slice(0, 10);
+        const latestDate = latestVoucher.vdate.tzDateTime().slice(0, 10);
         return {
             latestVoucherDate: latestDate,
             latestVoucherYear: latestVoucher.vdate.getUTCFullYear(),
@@ -402,22 +402,22 @@ function getDaybook(dateISO) {
             const debit = voucher.rows.reduce((sum, row) => sum + toNumber(row.dr), 0);
             const credit = voucher.rows.reduce((sum, row) => sum + toNumber(row.cr), 0);
             return {
-                id: voucher.id,
-                voucherNo: voucher.voucherNo,
-                vtype: voucher.vtype,
-                vdate: voucher.vdate.toISOString().slice(0, 10),
-                narration: voucher.narration,
-                rows: voucher.rows.map((row) => ({
-                    id: row.id,
-                    accountId: row.accountId,
-                    account: row.account ? mapAccount(row.account) : undefined,
-                    dr: toNumber(row.dr),
-                    cr: toNumber(row.cr),
-                    memo: row.memo,
-                })),
-                debit,
-                credit,
-            };
+							id: voucher.id,
+							voucherNo: voucher.voucherNo,
+							vtype: voucher.vtype,
+							vdate: voucher.vdate.tzDateTime().slice(0, 10),
+							narration: voucher.narration,
+							rows: voucher.rows.map((row) => ({
+								id: row.id,
+								accountId: row.accountId,
+								account: row.account ? mapAccount(row.account) : undefined,
+								dr: toNumber(row.dr),
+								cr: toNumber(row.cr),
+								memo: row.memo,
+							})),
+							debit,
+							credit,
+						};
         });
         return {
             list,

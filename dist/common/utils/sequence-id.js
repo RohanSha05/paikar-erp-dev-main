@@ -11,7 +11,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.nextDailySequenceIdForDelegate = nextDailySequenceIdForDelegate;
 function datePartFrom(date) {
-    return date.toISOString().slice(0, 10).replace(/-/g, '');
+    return date.tzDateTime().slice(0, 10).replace(/-/g, "");
 }
 function nextSequenceFrom(latest) {
     if (!latest)

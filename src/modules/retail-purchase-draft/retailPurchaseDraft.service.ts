@@ -1,55 +1,72 @@
 import { prisma } from '../../db/prisma';
 import { Prisma } from '@prisma/client';
 import { createParty } from '../parties/module.service';
+import { parseDhakaDate } from '../../common/utils/date';
+
+// Converts Prisma Decimal objects to plain JS numbers at the source
+function serialize<T>(data: T): T {
+  return JSON.parse(
+    JSON.stringify(data, (_key, value) => {
+      // Prisma Decimal has a toFixed method and a constructor named 'Decimal'
+      if (value !== null && typeof value === 'object') {
+        const ctor = value?.constructor?.name;
+        if (ctor === 'Decimal' || ctor === 'Decimal128') {
+          return parseFloat(value.toString());
+        }
+        // Fallback: duck-type check
+        if (typeof value.toFixed === 'function' && typeof value.toNumber === 'function') {
+          return value.toNumber();
+        }
+      }
+      return value;
+    })
+  );
+}
 
 export class RetailPurchaseDraftService {
-    static async updateDraft(id: string, data: any) {
-      // Only allow updating certain fields
-      return prisma.retailPurchaseDraft.update({
-        where: { id },
-        data: {
-          mon: data.mon,
-          price: data.price,
-          notes: data.notes,
-          paidAmount: data.paidAmount,
-          dueAmount: data.dueAmount,
-          isDue: data.isDue,
-          sellerName: data.sellerName,
-          sellerAddress: data.sellerAddress,
-          sellerPhone: data.sellerPhone,
-          productId: data.productId,
-          productName: data.productName,
-          productCategory: data.productCategory,
-        },
-      });
-    }
-
-    static async deleteDraft(id: string) {
-      return prisma.retailPurchaseDraft.delete({ where: { id } });
-    }
-  static async listDraftsByDate(date: string) {
-    return prisma.retailPurchaseDraft.findMany({
-      where: {
-        date: new Date(date),
+  static async updateDraft(id: string, data: any) {
+    const result = await prisma.retailPurchaseDraft.update({
+      where: { id },
+      data: {
+        mon: data.mon,
+        price: data.price,
+        notes: data.notes,
+        paidAmount: data.paidAmount,
+        dueAmount: data.dueAmount,
+        isDue: data.isDue,
+        sellerName: data.sellerName,
+        sellerAddress: data.sellerAddress,
+        sellerPhone: data.sellerPhone,
+        productId: data.productId,
+        productName: data.productName,
+        productCategory: data.productCategory,
       },
+    });
+    return serialize(result);
+  }
+
+  static async deleteDraft(id: string) {
+    return prisma.retailPurchaseDraft.delete({ where: { id } });
+  }
+
+  static async listDraftsByDate(date: string) {
+    const result = await prisma.retailPurchaseDraft.findMany({
+      where: { date: parseDhakaDate(date) },
       orderBy: { createdAt: 'asc' },
       include: { seller: true },
     });
+    return serialize(result);
   }
+
   static async createDraft(data: any) {
-    // Validate required fields
     if (!data.date) throw new Error('Date is required');
     if (!data.mon) throw new Error('Mon is required');
     if (!data.price) throw new Error('Price is required');
 
-    let sellerId = data.sellerId;
-    // Removed: seller info should not change based on due payment; always use provided sellerId.
-
-    // Create the draft
-    return await prisma.retailPurchaseDraft.create({
+    const result = await prisma.retailPurchaseDraft.create({
       data: {
-        date: new Date(data.date),
-        sellerId,
+        date: parseDhakaDate(data.date),
+        sellerId: data.sellerId,
         market: data.market,
         mon: data.mon,
         price: data.price,
@@ -66,11 +83,10 @@ export class RetailPurchaseDraftService {
         createdBy: data.createdBy,
       },
     });
+    return serialize(result);
   }
-  /**
-   * Finalize all drafts for a given date, merge into a PO, and update drafts.
-   * Returns the created PO.
-   */
+
+  // ... finalizeDraftsForDate unchanged
   static async finalizeDraftsForDate(date: string, warehouseId: string, createdBy: string) {
     // Validate input
     if (!date || typeof date !== 'string' || isNaN(Date.parse(date))) {
@@ -82,12 +98,12 @@ export class RetailPurchaseDraftService {
     // Find all DRAFTs for the date
     const drafts = await prisma.retailPurchaseDraft.findMany({
       where: {
-        date: new Date(date),
+        date: parseDhakaDate(date),
         status: 'DRAFT',
       },
     });
     if (!drafts.length) throw new Error('No drafts to finalize for the selected date.');
-
+  
     // Always use 'খুচরা বিক্রেতা' as seller for PO
     let seller = await prisma.seller.findFirst({ where: { name: 'খুচরা বিক্রেতা' } });
     if (!seller) {
@@ -97,7 +113,7 @@ export class RetailPurchaseDraftService {
     // Optionally, update all drafts to usse this sellerId
     await prisma.retailPurchaseDraft.updateMany({
       where: { 
-        date: new Date(date),
+        date: parseDhakaDate(date),
         status: 'DRAFT',
       },
       data: { sellerId },

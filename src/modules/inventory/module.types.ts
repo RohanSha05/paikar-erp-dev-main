@@ -40,6 +40,7 @@ export type InventoryReportQuery = {
 	partyId?: string;
 	warehouseId?: string;
 	productId?: string;
+	productCategory?: string;
 	q?: string;
 	page: number;
 	pageSize: number;

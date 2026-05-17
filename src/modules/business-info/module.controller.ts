@@ -1,14 +1,22 @@
 import { Request, Response } from 'express';
 import * as service from './module.service';
 
+function stripOperationPass<T extends { operationPass?: unknown } | null>(info: T, isAdmin: boolean) {
+	if (!info || isAdmin) return info;
+	const { operationPass, ...rest } = info as NonNullable<T> & { operationPass?: unknown };
+	return rest as T;
+}
+
 export async function get(_req: Request, res: Response) {
 	const info = await service.getBusinessInfo();
-	return res.json({ success: true, data: info });
+	const isAdmin = _req.authUser?.role === 'ADMIN';
+	return res.json({ success: true, data: stripOperationPass(info, isAdmin) });
 }
 
 export async function getAll(_req: Request, res: Response) {
 	const info = await service.getAllBusinessInfo();
-	return res.json({ success: true, data: info });
+	const isAdmin = _req.authUser?.role === 'ADMIN';
+	return res.json({ success: true, data: info.map((row) => stripOperationPass(row, isAdmin)) });
 }
 
 export async function createOrUpdate(req: Request, res: Response) {

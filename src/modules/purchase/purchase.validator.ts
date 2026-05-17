@@ -28,7 +28,7 @@ const purchaseItemSchema = z.object({
   rateValue: z.number().nonnegative()
 });
 
-export const createPurchaseOrderDraftSchema = z.object({
+const purchaseOrderCommonFields = {
   purchaseType: z.enum(['district', 'trolley', 'retail']).optional(),
   sellerId: z.string().min(1),
   sellerSnapshot: sellerSnapshotSchema,
@@ -40,11 +40,12 @@ export const createPurchaseOrderDraftSchema = z.object({
   transportMode: z.enum(['sellerIncluded', 'marketTruck', 'ownTruck']).optional(),
   loading: z.number().nonnegative().default(0),
   misc: z.number().nonnegative().default(0),
-  advancePaid: z.number().nonnegative().optional().default(0),
+  advancePaid: z.number().nonnegative().optional(),
   advanceInstrumentId: z.string().optional(),
 
   bagCostMode: z.enum(['paid', 'self']).optional(),
   bagCostPerBag: z.number().nonnegative().default(0),
+  paidBags: z.number().int().nonnegative().optional(),
   loadingUnloading: z.number().nonnegative().default(0),
 
   remarks: z.string().optional(),
@@ -61,17 +62,26 @@ export const createPurchaseOrderDraftSchema = z.object({
   route: z.string().optional(),
 
   items: z.array(purchaseItemSchema).min(1)
+} as const;
+
+export const createPurchaseOrderDraftSchema = z.object({
+  ...purchaseOrderCommonFields,
+  advancePaid: z.number().nonnegative().optional().default(0),
 });
 
 export const createPurchaseOrderSchema = z.object({
   body: createPurchaseOrderDraftSchema
 });
 
+const updatePurchaseOrderBodySchema = z.object({
+  ...purchaseOrderCommonFields,
+});
+
 export const updatePurchaseOrderSchema = z.object({
   params: z.object({
     id: z.string().min(1)
   }),
-  body: createPurchaseOrderDraftSchema.extend({
+  body: updatePurchaseOrderBodySchema.extend({
     editPassword: z.string().optional()
   })
 });
@@ -98,7 +108,7 @@ export const deletePurchaseOrderSchema = z.object({
 });
 
 export type CreatePurchaseOrderDraftInput = z.infer<typeof createPurchaseOrderDraftSchema>;
-export type UpdatePurchaseOrderDraftInput = z.infer<typeof createPurchaseOrderDraftSchema> & {
+export type UpdatePurchaseOrderDraftInput = z.infer<typeof updatePurchaseOrderBodySchema> & {
   editPassword?: string;
 };
 export type DeletePurchaseOrderInput = z.infer<typeof deletePurchaseOrderSchema>['body'];

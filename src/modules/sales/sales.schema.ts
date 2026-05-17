@@ -1,13 +1,15 @@
 import { z } from 'zod';
 
 const salesItemSchema = z.object({
+  id: z.string().optional(),
   lotId: z.string().min(1),
   productType: z.string().min(1),
   productId: z.string().min(1).optional(),
   qtyKg: z.number().positive(),
-  rateBasis: z.enum(['perKg', 'perMon']),
+  rateBasis: z.enum(['perKg', 'perMon', 'perBag']),
   rateValue: z.number().positive(),
-  bagCount : z.number().min(0)
+  bagCount: z.number().min(0),
+  kgPerBag: z.number().min(0).optional()
 });
 
 const customerSnapshotSchema = z.object({

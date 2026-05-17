@@ -21,6 +21,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { dhakaDayEnd, dhakaDayStart, tzDate, tzDateTime } from '../../common/utils/date';
 import type {
 	AccountDto,
 	CreateAccountInput,
@@ -77,9 +78,10 @@ async function getOpeningFromVouchers(accountId: string, beforeDate?: Date) {
   const rows = await prisma.voucherRow.findMany({
     where: {
       accountId,
-      ...(beforeDate && {
-        voucher: { vdate: { lt: beforeDate } },
-      }),
+			voucher: {
+				status: 'POSTED',
+				...(beforeDate && { vdate: { lt: beforeDate } }),
+			},
     },
     select: { dr: true, cr: true },
   });
@@ -117,6 +119,7 @@ async function getOpeningFromVouchers(accountId: string, beforeDate?: Date) {
 
 export async function getReportMeta(): Promise<ReportMetaDto> {
 	const latestVoucher = await prisma.voucher.findFirst({
+    where: { status: 'POSTED' },
 		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
 		select: { vdate: true },
 	});
@@ -128,10 +131,10 @@ export async function getReportMeta(): Promise<ReportMetaDto> {
 		};
 	}
 
-	const latestDate = latestVoucher.vdate.toISOString().slice(0, 10);
+	const latestDate = tzDate(latestVoucher.vdate);
 	return {
 		latestVoucherDate: latestDate,
-		latestVoucherYear: latestVoucher.vdate.getUTCFullYear(),
+		latestVoucherYear: latestVoucher.vdate.getFullYear(),
 	};
 }
 
@@ -141,19 +144,19 @@ async function fetchVouchers(startDate?: string, endDate?: string) {
 	if (startDate) {
 		where.vdate = {
 			...where.vdate,
-			gte: new Date(`${startDate}T00:00:00Z`),
+			gte: dhakaDayStart(startDate),
 		};
 	}
 
 	if (endDate) {
 		where.vdate = {
 			...where.vdate,
-			lte: new Date(`${endDate}T23:59:59Z`),
+			lte: dhakaDayEnd(endDate),
 		};
 	}
 
 	return prisma.voucher.findMany({
-		where,
+ 		where: { ...where, status: 'POSTED' },
 		include: {
 			rows: {
 				include: {
@@ -166,6 +169,34 @@ async function fetchVouchers(startDate?: string, endDate?: string) {
 			{ createdAt: 'desc' },
 		],
 	});
+}
+
+async function getDaybookOpening(dateISO: string) {
+	const openingDate = dhakaDayStart(dateISO);
+	const vouchers = await prisma.voucher.findMany({
+		where: {
+			status: 'POSTED',
+			vdate: { lt: openingDate },
+		},
+		include: {
+			rows: {
+				select: { dr: true, cr: true },
+			},
+		},
+		orderBy: [
+			{ vdate: 'asc' },
+			{ createdAt: 'asc' },
+		],
+	});
+
+	const sideForVoucher = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
+
+	return vouchers.reduce((sum, voucher) => {
+		const debit = voucher.rows.reduce((rowSum, row) => rowSum + toNumber(row.dr), 0);
+		const credit = voucher.rows.reduce((rowSum, row) => rowSum + toNumber(row.cr), 0);
+		const amount = Math.max(debit, credit);
+		return sideForVoucher(voucher.vtype) === 'debit' ? sum + amount : sum - amount;
+	}, 0);
 }
 
 export async function listAccounts(filterByType?: string): Promise<AccountDto[]> {
@@ -242,7 +273,7 @@ type OpeningSide = 'dr' | 'cr';
 function coerceAmount(value?: number | null) {
 	const amount = Number(value ?? 0);
 	return Number.isFinite(amount) ? amount : 0;
-}
+} 
 
 function defaultOpeningSide(type: string, partyKind?: string): OpeningSide {
 	const normalizedType = normalizeType(type);
@@ -399,6 +430,7 @@ async function postOpeningVoucher(
 			rows: {
 				create: [accountRow, equityRow],
 			},
+			status: 'POSTED'
 		},
 	});
 }
@@ -473,14 +505,18 @@ export async function createAccount(input: CreateAccountInput): Promise<AccountD
 
 export async function getDaybook(dateISO: string) {
 	const vouchers = await fetchVouchers(dateISO, dateISO);
+	const opening = await getDaybookOpening(dateISO);
+	const daybookSide = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
 	const list = vouchers.map((voucher) => {
 		const debit = voucher.rows.reduce((sum, row) => sum + toNumber(row.dr), 0);
 		const credit = voucher.rows.reduce((sum, row) => sum + toNumber(row.cr), 0);
+		const amount = Math.max(debit, credit);
+		const side = daybookSide(voucher.vtype);
 		return {
 			id: voucher.id,
 			voucherNo: voucher.voucherNo,
 			vtype: voucher.vtype,
-			vdate: voucher.vdate.toISOString().slice(0, 10),
+			vdate: tzDate(voucher.vdate),
 			narration: voucher.narration,
 			rows: voucher.rows.map((row) => ({
 				id: row.id,
@@ -490,17 +526,21 @@ export async function getDaybook(dateISO: string) {
 				cr: toNumber(row.cr),
 				memo: row.memo,
 			})),
-			debit,
-			credit,
+			debit: side === 'debit' ? amount : 0,
+			credit: side === 'credit' ? amount : 0,
 		};
 	});
+	const totals = {
+		debit: list.reduce((sum, item) => sum + item.debit, 0),
+		credit: list.reduce((sum, item) => sum + item.credit, 0),
+	};
+	const closing = opening + totals.debit - totals.credit;
 
 	return {
+		opening,
+		closing,
 		list,
-		totals: {
-			debit: list.reduce((sum, item) => sum + item.debit, 0),
-			credit: list.reduce((sum, item) => sum + item.credit, 0),
-		},
+		totals,
 	};
 }
 
@@ -510,8 +550,8 @@ export async function getLedger(accountId: string, from?: string, to?: string): 
 		throw new HttpError(404, 'Account not found');
 	}
 
-	const openingDate = from ? new Date(`${from}T00:00:00Z`) : undefined;
-	const closingDate = to ? new Date(`${to}T23:59:59Z`) : undefined;
+	const openingDate = from ? dhakaDayStart(from) : undefined;
+	const closingDate = to ? dhakaDayEnd(to) : undefined;
 
 	// Only calculate opening if a from date is provided
 	// If no from date, opening is implicit in the vouchers query
@@ -546,12 +586,12 @@ export async function getLedger(accountId: string, from?: string, to?: string): 
 			balance += toNumber(row.dr) - toNumber(row.cr);
 			return {
 				vId: voucher.voucherNo,
-				date: voucher.vdate.toISOString().slice(0, 10),
+				date: tzDate(voucher.vdate),
 				memo: row.memo || voucher.narration || undefined,
 				dr: toNumber(row.dr),
 				cr: toNumber(row.cr),
 				balance,
-				createdAt: row.createdAt.toISOString(), 
+				createdAt: tzDateTime(row.createdAt), 
 			};
 		}): [],
 	);
@@ -571,6 +611,7 @@ export async function getTrialBalance(): Promise<TrialBalanceDto> {
 	});
 
 	const vouchers = await prisma.voucher.findMany({
+		where: { status: 'POSTED' },
 		include: { rows: true },
 		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
 	});
@@ -617,14 +658,15 @@ export async function getTrialBalance(): Promise<TrialBalanceDto> {
 export async function getExpenseSummary(year: number): Promise<ExpenseMonthSummaryDto[]> {
 	if (!Number.isFinite(year)) {
 		const meta = await getReportMeta();
-		year = meta.latestVoucherYear ?? new Date().getUTCFullYear();
+		year = meta.latestVoucherYear ?? new Date().getFullYear();
 	}
 
-	const start = new Date(`${year}-01-01T00:00:00Z`);
-	const end = new Date(`${year}-12-31T23:59:59Z`);
+	const start = dhakaDayStart(`${year}-01-01`);
+	const end = dhakaDayEnd(`${year}-12-31`);
 	const vouchers = await prisma.voucher.findMany({
 		where: {
 			vdate: { gte: start, lte: end },
+			status: 'POSTED',
 		},
 		include: {
 			rows: {

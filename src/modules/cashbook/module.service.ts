@@ -3,6 +3,7 @@ import { HttpError } from '../../common/httpError';
 import { PartyType } from '@prisma/client';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { dhakaDayEnd, dhakaDayStart, tzDate, tzDateTime } from '../../common/utils/date';
 import type {
   AccountDto,
   CreatePartyInput,
@@ -506,7 +507,7 @@ async function generateVoucherNumber(vdate: string): Promise<string> {
     prisma.voucher,
     'voucherNo',
     'VCH',
-    new Date(`${vdate}T00:00:00.000Z`),
+    dhakaDayStart(vdate),
   );
 }
 
@@ -550,7 +551,7 @@ function round2(value: number) {
 }
 
 function parseVoucherDate(vdate: string) {
-  const parsed = new Date(`${vdate}T00:00:00Z`);
+  const parsed = dhakaDayStart(vdate);
   if (Number.isNaN(parsed.getTime())) {
     throw new HttpError(400, 'Invalid date format');
   }
@@ -645,7 +646,7 @@ async function ensureRoundingAccountId(): Promise<string> {
   });
   return account.id;
 }
-
+ 
 /**
  * Create a new voucher with transaction rows
  */
@@ -656,7 +657,7 @@ export async function createVoucher(
 }
 
 export async function createDraftVoucher(
-  input: CreateDraftVoucherInput,
+  input: CreateDraftVoucherInput, 
 ): Promise<VoucherDto> {
   return createVoucherRecord(input, 'DRAFT');
 }
@@ -696,14 +697,14 @@ export async function listVouchers(
   if (startDate) {
     where.vdate = {
       ...where.vdate,
-      gte: new Date(`${startDate}T00:00:00Z`),
+      gte: dhakaDayStart(startDate),
     };
   }
 
   if (endDate) {
     where.vdate = {
       ...where.vdate,
-      lte: new Date(`${endDate}T23:59:59Z`),
+      lte: dhakaDayEnd(endDate),
     };
   }
 
@@ -837,11 +838,11 @@ function mapVoucherToDto(voucher: any): VoucherDto {
     id: voucher.id,
     voucherNo: voucher.voucherNo,
     vtype: voucher.vtype,
-    vdate: voucher.vdate.toISOString().split('T')[0],
+    vdate: tzDate(voucher.vdate),
     narration: voucher.narration,
     status: voucher.status,
-    postedAt: voucher.postedAt ? voucher.postedAt.toISOString() : null,
-    deletedAt: voucher.deletedAt ? voucher.deletedAt.toISOString() : null,
+    postedAt: voucher.postedAt ? tzDateTime(voucher.postedAt) : null,
+    deletedAt: voucher.deletedAt ? tzDateTime(voucher.deletedAt) : null,
     rows: voucher.rows.map((row: any) => ({
       id: row.id,
       accountId: row.accountId,
@@ -859,7 +860,7 @@ function mapVoucherToDto(voucher: any): VoucherDto {
       cr: Number(row.cr),
       memo: row.memo,
     })),
-    createdAt: voucher.createdAt.toISOString(),
-    updatedAt: voucher.updatedAt ? voucher.updatedAt.toISOString() : undefined,
+    createdAt: tzDateTime(voucher.createdAt),
+    updatedAt: voucher.updatedAt ? tzDateTime(voucher.updatedAt) : tzDateTime(voucher.createdAt),
   };
 }

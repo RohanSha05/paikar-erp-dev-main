@@ -1,5 +1,7 @@
+import { tzDateForId } from './date';
+
 function datePartFrom(date: Date) {
-  return date.toISOString().slice(0, 10).replace(/-/g, '');
+  return tzDateForId(date);
 }
 
 function nextSequenceFrom(latest: string | null | undefined) {

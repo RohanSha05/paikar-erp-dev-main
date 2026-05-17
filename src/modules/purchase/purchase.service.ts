@@ -1,5 +1,4 @@
 import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
-import bcrypt from 'bcrypt';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreatePurchaseOrderDraftInput, UpdatePurchaseOrderDraftInput } from './purchase.validator';
@@ -78,9 +77,108 @@ function resolveItemDisplayName(item: { productType?: string | null; productName
   return item.productType?.trim() || item.productName?.trim() || productName;
 }
 
+async function syncApprovedPurchaseOrderItems(
+  tx: Prisma.TransactionClient,
+  purchaseOrderId: string,
+  existingItems: Array<{ id: string }>,
+  inputItems: UpdatePurchaseOrderDraftInput['items'],
+  productNameById: Map<string, string>
+) {
+  const existingById = new Map(existingItems.map((item) => [item.id, item]));
+  const retainedIds = new Set<string>();
+
+  for (const item of inputItems) {
+    const resolvedName = resolveItemDisplayName(item, productNameById.get(item.productId) || '');
+
+    if (item.id && existingById.has(item.id)) {
+      retainedIds.add(item.id);
+      await tx.purchaseOrderItem.update({
+        where: { id: item.id },
+        data: {
+          productId: item.productId,
+          productName: resolvedName,
+          bagCount: item.bagCount,
+          actualKgPerBag: new Prisma.Decimal(item.actualKgPerBag),
+          accountingKgPerBag: new Prisma.Decimal(item.accountingKgPerBag),
+          weightPolicy: item.weightPolicy,
+          rateBasis: item.rateBasis,
+          rateValue: new Prisma.Decimal(item.rateValue),
+        },
+      });
+      continue;
+    }
+
+    await tx.purchaseOrderItem.create({
+      data: {
+        purchaseOrderId,
+        productId: item.productId,
+        productName: resolvedName,
+        bagCount: item.bagCount,
+        actualKgPerBag: new Prisma.Decimal(item.actualKgPerBag),
+        accountingKgPerBag: new Prisma.Decimal(item.accountingKgPerBag),
+        weightPolicy: item.weightPolicy,
+        rateBasis: item.rateBasis,
+        rateValue: new Prisma.Decimal(item.rateValue),
+      },
+    });
+  }
+
+  const removedIds = existingItems
+    .filter((item) => !retainedIds.has(item.id))
+    .map((item) => item.id);
+
+  if (removedIds.length) {
+    await tx.purchaseOrderItem.deleteMany({
+      where: {
+        purchaseOrderId,
+        id: { in: removedIds },
+      },
+    });
+  }
+}
+
 function numberValue(value: unknown) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function toNumberOrUndefined(value: unknown) {
+  if (value === null || value === undefined) return undefined;
+  const n = numberValue(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function normalizePurchaseRemarks(value: unknown) {
+  const text = String(value ?? '').trim();
+  if (!text) return undefined;
+
+  const bagMixRegex = /Bag\s*mix:\s*own\s*\d+\s*,\s*paid\s*\d+\s*@\s*[\d.]+\s*\/bag/i;
+  const parts = text
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  let bagMixPart = '';
+  const nonBagMixParts: string[] = [];
+  const seen = new Set<string>();
+
+  for (const part of parts) {
+    if (bagMixRegex.test(part)) {
+      bagMixPart = part;
+      continue;
+    }
+    if (!seen.has(part)) {
+      seen.add(part);
+      nonBagMixParts.push(part);
+    }
+  }
+
+  const normalizedParts = bagMixPart
+    ? [...nonBagMixParts, bagMixPart]
+    : nonBagMixParts;
+  const normalized = normalizedParts.join(' | ').trim();
+
+  return normalized || undefined;
 }
 
 
@@ -151,12 +249,14 @@ function computePurchaseTotals(order: any) {
     };
   });
 
-  const bagCostTotal = bagCostMode === 'self' ? 0 : totalBags * bagCostPerBag;
+  const paidBagsFromOrder = numberValue(order?.paidBags);
+  const paidBags = bagCostMode === 'self' ? 0 : paidBagsFromOrder > 0 ? Math.min(totalBags, paidBagsFromOrder) : totalBags;
+  const bagCostTotal = bagCostMode === 'self' ? 0 : paidBags * bagCostPerBag;
   const extraCosts = headerExtraCosts + bagCostTotal;
   const totalCost = basePurchase + extraCosts;
 
   const productSummaries = rawLines.map((line) => {
-    const bagCost = bagCostMode === 'self' ? 0 : line.bags * bagCostPerBag;
+    const bagCost = bagCostMode === 'self' ? 0 : totalBags > 0 ? (line.bags / totalBags) * bagCostTotal : 0;
     const headerCostShare = totalStockKg > 0 ? headerExtraCosts * (line.stockKg / totalStockKg) : 0;
     const lineCost = line.baseCost + bagCost + headerCostShare;
     const avgPerKg = line.stockKg > 0 ? lineCost / line.stockKg : 0;
@@ -263,6 +363,7 @@ async function postPurchaseAdvance(tx: any, po: any) {
       vdate: new Date(),
       narration: `Advance for PO ${po.poNo}`,
       purchaseOrderId: po.id,
+      status: 'POSTED'
     },
   });
 
@@ -291,8 +392,45 @@ function toPurchaseOrderDto(order: any) {
   const initialStockKg = computeInitialStockKg(order);
   const remainingStockKg = computeRemainingStockKg(order);
   const soldState = computeSoldState(order, initialStockKg, remainingStockKg);
+  const items = Array.isArray(order?.items)
+    ? order.items.map((item: any) => ({
+        ...item,
+        bagCount: numberValue(item?.bagCount),
+        actualKgPerBag: numberValue(item?.actualKgPerBag),
+        accountingKgPerBag: numberValue(item?.accountingKgPerBag),
+        rateValue: numberValue(item?.rateValue),
+      }))
+    : [];
+
+  const lots = Array.isArray(order?.lots)
+    ? order.lots.map((lot: any) => ({
+        ...lot,
+        availableKg: numberValue(lot?.availableKg),
+      }))
+    : [];
+
   return {
     ...order,
+    transport: numberValue(order?.transport),
+    loading: numberValue(order?.loading),
+    loadingUnloading: numberValue(order?.loadingUnloading),
+    misc: numberValue(order?.misc),
+    advancePaid: toNumberOrUndefined(order?.advancePaid),
+    bagCostPerBag: numberValue(order?.bagCostPerBag),
+    totals: {
+      ...(order?.totals || {}),
+      ...totals,
+      totalBags: numberValue((order?.totals as any)?.totalBags),
+      totalStockKg: numberValue((order?.totals as any)?.totalStockKg),
+      basePurchase: numberValue((order?.totals as any)?.basePurchase),
+      bagCostTotal: numberValue((order?.totals as any)?.bagCostTotal),
+      headerExtraCosts: numberValue((order?.totals as any)?.headerExtraCosts),
+      extraCosts: numberValue((order?.totals as any)?.extraCosts),
+      totalCost: numberValue((order?.totals as any)?.totalCost ?? totals.totalCost),
+    },
+    totalCost: numberValue(totals.totalCost),
+    items,
+    lots,
     sellerSnapshot: order?.sellerSnapshot
       ? order.sellerSnapshot
       : order?.seller
@@ -305,11 +443,6 @@ function toPurchaseOrderDto(order: any) {
           phone: order.seller.phone,
         }
       : order?.sellerSnapshot,
-    totals: {
-      ...(order?.totals || {}),
-      ...totals,
-    },
-    totalCost: totals.totalCost,
     initialStockKg,
     remainingStockKg,
     soldState,
@@ -400,7 +533,7 @@ export async function createDraft(input: CreatePurchaseOrderDraftInput) {
       advanceInstrumentId: input.advanceInstrumentId,
         bagCostMode: input.bagCostMode,
       bagCostPerBag: new Prisma.Decimal(input.bagCostPerBag),
-      remarks: input.remarks,
+      remarks: normalizePurchaseRemarks(input.remarks),
         productType: resolveItemDisplayName(input.items[0] ?? {}, productNameById.get(input.items[0]?.productId || '') || ''),
       varietyNote: input.varietyNote,
         destinationType: input.destinationRef?.type ?? input.destinationKind,
@@ -463,7 +596,6 @@ export async function updatePurchaseOrderDraft(
       await validatePurchaseCanBeEdited(id);
 
       await reversePurchaseOrderImpact(tx, existing, userId);
-      await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
     } else if (existing.status !== 'DRAFT') {
       throw new HttpError(409, 'Only draft or approved PO can be edited');
     }
@@ -481,52 +613,67 @@ export async function updatePurchaseOrderDraft(
     });
     const productNameById = new Map(products.map((product) => [product.id, product.name]));
 
+    const purchaseOrderData = {
+      purchaseType: input.purchaseType,
+      sellerId: input.sellerId,
+      warehouseId: input.warehouseId,
+      transport: new Prisma.Decimal(input.transport),
+      loading: new Prisma.Decimal(input.loading),
+      loadingUnloading: new Prisma.Decimal(input.loadingUnloading),
+      misc: new Prisma.Decimal(input.misc),
+      advancePaid: new Prisma.Decimal(
+        input.advancePaid ?? Number(existing.advancePaid || 0),
+      ),
+      advanceInstrumentId: input.advanceInstrumentId ?? existing.advanceInstrumentId,
+      bagCostMode: input.bagCostMode,
+      bagCostPerBag: new Prisma.Decimal(input.bagCostPerBag),
+      remarks: normalizePurchaseRemarks(input.remarks),
+      productType: resolveItemDisplayName(input.items[0] ?? {}, productNameById.get(input.items[0]?.productId || '') || ''),
+      varietyNote: input.varietyNote,
+      destinationType: input.destinationRef?.type ?? input.destinationKind,
+      destinationRefId: input.destinationRef?.id,
+      destinationKind: input.destinationKind,
+      destinationWarehouseId: input.destinationWarehouseId ?? undefined,
+      destinationCustomerId: input.destinationCustomerId ?? undefined,
+      transportMode: input.transportMode,
+      driverId: input.driverId,
+      driverName: input.driverName,
+      truckNo: input.truckNo,
+      route: input.route,
+    };
+
     const updated = await tx.purchaseOrder.update({
       where: { id },
-      data: {
-        purchaseType: input.purchaseType,
-        sellerId: input.sellerId,
-        warehouseId: input.warehouseId,
-        transport: new Prisma.Decimal(input.transport),
-        loading: new Prisma.Decimal(input.loading),
-        loadingUnloading: new Prisma.Decimal(input.loadingUnloading),
-        misc: new Prisma.Decimal(input.misc),
-        advancePaid: new Prisma.Decimal(input.advancePaid || 0),
-        advanceInstrumentId: input.advanceInstrumentId,
-        bagCostMode: input.bagCostMode,
-        bagCostPerBag: new Prisma.Decimal(input.bagCostPerBag),
-        remarks: input.remarks,
-        productType: resolveItemDisplayName(input.items[0] ?? {}, productNameById.get(input.items[0]?.productId || '') || ''),
-        varietyNote: input.varietyNote,
-        destinationType: input.destinationRef?.type ?? input.destinationKind,
-        destinationRefId: input.destinationRef?.id,
-        destinationKind: input.destinationKind,
-        destinationWarehouseId: input.destinationWarehouseId ?? undefined,
-        destinationCustomerId: input.destinationCustomerId ?? undefined,
-        transportMode: input.transportMode,
-        driverId: input.driverId,
-        driverName: input.driverName,
-        truckNo: input.truckNo,
-        route: input.route,
-        items: {
-          create: input.items.map((x) => ({
-            productId: x.productId,
-            productName: resolveItemDisplayName(x, productNameById.get(x.productId) || ''),
-            bagCount: x.bagCount,
-            actualKgPerBag: new Prisma.Decimal(x.actualKgPerBag),
-            accountingKgPerBag: new Prisma.Decimal(x.accountingKgPerBag),
-            weightPolicy: x.weightPolicy,
-            rateBasis: x.rateBasis,
-            rateValue: new Prisma.Decimal(x.rateValue)
-          }))
-        }
-      },
+      data:
+        existing.status === 'APPROVED'
+          ? purchaseOrderData
+          : {
+              ...purchaseOrderData,
+              items: {
+                // remove previous draft items and recreate from input to avoid duplicates
+                deleteMany: {},
+                create: input.items.map((x) => ({
+                  productId: x.productId,
+                  productName: resolveItemDisplayName(x, productNameById.get(x.productId) || ''),
+                  bagCount: x.bagCount,
+                  actualKgPerBag: new Prisma.Decimal(x.actualKgPerBag),
+                  accountingKgPerBag: new Prisma.Decimal(x.accountingKgPerBag),
+                  weightPolicy: x.weightPolicy,
+                  rateBasis: x.rateBasis,
+                  rateValue: new Prisma.Decimal(x.rateValue)
+                }))
+              }
+            },
       include: {
         seller: true,
         warehouse: true,
         items: true
       }
     });
+
+    if (existing.status === 'APPROVED') {
+      await syncApprovedPurchaseOrderItems(tx, id, existing.items, input.items, productNameById);
+    }
 
     if (input.sellerSnapshot) {
       await tx.$executeRaw`
@@ -591,16 +738,16 @@ async function verifyConfirmedPurchasePassword(
     throw new HttpError(403, `Confirmed purchase ${action} requires password`);
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { passwordHash: true, active: true }
-  });
+  const businessInfo = await prisma.businessInfo.findFirst({
+    orderBy: { createdAt: 'asc' }
+  }) as { operationPass?: string | null } | null;
 
-  if (!user || !user.active) {
-    throw new HttpError(401, 'Invalid user');
+  const expectedPassword = String(businessInfo?.operationPass || '').trim();
+  if (!expectedPassword) {
+    throw new HttpError(500, 'Operation password is not configured');
   }
 
-  const ok = await bcrypt.compare(password, user.passwordHash);
+  const ok = String(password).trim() === expectedPassword;
   if (!ok) {
     throw new HttpError(401, `Incorrect password for confirmed purchase ${action}`);
   }
@@ -656,30 +803,46 @@ async function reversePurchaseOrderImpact(
     include: { rows: true }
   });
 
-  for (const voucher of prevVouchers) {
-    const reversalVoucher = await tx.voucher.create({
-      data: {
-        voucherNo: await voucherNo(tx),
-        vtype: voucher.vtype,
-        vdate: new Date(),
-        narration: `Reversal of ${voucher.voucherNo} for PO ${po.poNo}`,
-        purchaseOrderId: po.id,
-      }
-    });
+  // Remove previous vouchers for this PO
+await tx.voucherRow.deleteMany({
+  where: {
+    voucher: {
+      purchaseOrderId: po.id,
+    },
+  },
+});
 
-    // Create reversing rows (DR/CR flipped)
-    const reversalRows = voucher.rows.map((row) => ({
-      voucherId: reversalVoucher.id,
-      accountId: row.accountId,
-      dr: new Prisma.Decimal(Number(row.cr || 0)),
-      cr: new Prisma.Decimal(Number(row.dr || 0)),
-      memo: row.memo,
-    }));
+await tx.voucher.deleteMany({
+  where: {
+    purchaseOrderId: po.id,
+  },
+});
 
-    if (reversalRows.length) {
-      await tx.voucherRow.createMany({ data: reversalRows });
-    }
-  }
+  // for (const voucher of prevVouchers) {
+  //   const reversalVoucher = await tx.voucher.create({
+  //     data: {
+  //       voucherNo: await voucherNo(tx),
+  //       vtype: voucher.vtype,
+  //       vdate: new Date(),
+  //       narration: `Reversal of ${voucher.voucherNo} for PO ${po.poNo}`,
+  //       purchaseOrderId: po.id,
+  //       status: 'POSTED'
+  //     }
+  //   });
+
+  //   // Create reversing rows (DR/CR flipped)
+  //   const reversalRows = voucher.rows.map((row) => ({
+  //     voucherId: reversalVoucher.id,
+  //     accountId: row.accountId,
+  //     dr: new Prisma.Decimal(Number(row.cr || 0)),
+  //     cr: new Prisma.Decimal(Number(row.dr || 0)),
+  //     memo: row.memo,
+  //   }));
+
+  //   if (reversalRows.length) {
+  //     await tx.voucherRow.createMany({ data: reversalRows });
+  //   }
+  // }
 
   // Update lot availableKg to restore reversed quantities
   for (const lotId of lotIds) {
@@ -738,7 +901,7 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
   let totalStockKg = 0;
   const poExtended = po as typeof po & { bagCostMode?: string | null; loadingUnloading?: Prisma.Decimal | null };
   const bagCostPerBag = poExtended.bagCostMode === 'self' ? 0 : Number(po.bagCostPerBag);
-  const createdLotIds: string[] = [];
+  const touchedLotIds: string[] = [];
 
   for (const [index, item] of po.items.entries()) {
     const bagCount = Number(item.bagCount);
@@ -788,36 +951,64 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
       },
     });
 
-    const nextLotNo = await lotNo(tx);
     const sellerName = po.seller.name;
-
-    const lot = await tx.lot.create({
-      data: {
-        lotNo: nextLotNo,
-        label: buildLotLabel({
-          lotNo: nextLotNo,
-          sellerName,
-          date: new Date(po.createdAt || new Date()),
-          category: product?.category || 'GEN',
-          productName: product?.name || 'UNKNOWN',
-          weightKg: stockKg,
-          rateBasis: item.rateBasis as 'perKg' | 'perMon' | 'perBag',
-          rateValue: Number(item.rateValue),
-        }),
-        productId: item.productId,
-        warehouseId: po.warehouseId,
-        availableKg: new Prisma.Decimal(stockKg),
-        avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
+    const existingLot = await tx.lot.findFirst({
+      where: {
         sourcePoId: po.id,
         sourcePoItemId: item.id,
-        meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+      },
+      select: {
+        id: true,
       },
     });
+
+    let lotId: string;
+    if (existingLot) {
+      await tx.lot.update({
+        where: { id: existingLot.id },
+        data: {
+          productId: item.productId,
+          warehouseId: po.warehouseId,
+          availableKg: new Prisma.Decimal(stockKg),
+          avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
+          sourcePoId: po.id,
+          sourcePoItemId: item.id,
+          meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+        },
+      });
+      lotId = existingLot.id;
+    } else {
+      const nextLotNo = await lotNo(tx);
+      const lot = await tx.lot.create({
+        data: {
+          lotNo: nextLotNo,
+          label: buildLotLabel({
+            lotNo: nextLotNo,
+            sellerName,
+            date: new Date(po.createdAt || new Date()),
+            category: product?.category || 'GEN',
+            productName: product?.name || 'UNKNOWN',
+            weightKg: stockKg,
+            rateBasis: item.rateBasis as 'perKg' | 'perMon' | 'perBag',
+            rateValue: Number(item.rateValue),
+          }),
+          productId: item.productId,
+          warehouseId: po.warehouseId,
+          availableKg: new Prisma.Decimal(stockKg),
+          avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
+          sourcePoId: po.id,
+          sourcePoItemId: item.id,
+          meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+        },
+      });
+      lotId = lot.id;
+    }
+    touchedLotIds.push(lotId);
 
     await tx.stockMove.create({
       data: {
         moveNo: await stockMoveNo(tx),
-        lotId: lot.id,
+        lotId,
         warehouseId: po.warehouseId,
         qtyKg: new Prisma.Decimal(stockKg),
         reason: StockMoveReason.PURCHASE,
@@ -825,7 +1016,6 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
         refId: po.id
       }
     });
-    createdLotIds.push(lot.id);
   }
 
   const headerLoading = Number(poExtended.loadingUnloading ?? po.loading);
@@ -866,7 +1056,8 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
       vtype: 'journal',
       vdate: new Date(),
       narration: `Auto purchase approval for ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
-      purchaseOrderId: po.id
+      purchaseOrderId: po.id,
+      status: 'POSTED'
     }
   });
 
@@ -926,7 +1117,7 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
   await postPurchaseAdvance(tx, po);
 
   try {
-    for (const lid of createdLotIds) {
+    for (const lid of touchedLotIds) {
       const sumRow: any = await tx.stockMove.aggregate({ where: { lotId: lid }, _sum: { qtyKg: true } });
       const sumQty = Number(sumRow._sum?.qtyKg || 0);
       const lotRow = await tx.lot.findUnique({ where: { id: lid }, select: { id: true, availableKg: true, label: true } });
@@ -988,6 +1179,9 @@ export async function deletePurchaseOrder(
     if (existing.status === 'APPROVED') {
       await reversePurchaseOrderImpact(tx, existing, userId);
     }
+
+    // Delete lots created from this PO (will cascade-delete related stock moves)
+    await tx.lot.deleteMany({ where: { sourcePoId: id } });
 
     await tx.purchaseOrder.delete({ where: { id } });
 

@@ -24,6 +24,7 @@ export async function remove(req: Request, res: Response) {
 export async function post(req: Request, res: Response) {
 	const year = Number(req.query.year || new Date().getFullYear());
 	const month = Number(req.query.month || new Date().getMonth() + 1);
-	const result = await service.postRecurringTemplate(req.params.id, year, month);
+	const postDate = typeof req.query.postDate === 'string' ? req.query.postDate : undefined;
+	const result = await service.postRecurringTemplate(req.params.id, year, month, postDate);
 	return res.json({ success: true, message: 'Recurring template posted', data: result });
 }

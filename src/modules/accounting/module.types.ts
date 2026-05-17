@@ -41,6 +41,34 @@ export interface LedgerReportDto {
 	rows: LedgerRowDto[];
 }
 
+export interface DaybookRowDto {
+	id: string;
+	voucherNo: string;
+	vtype: string;
+	vdate: string;
+	narration?: string;
+	rows: Array<{
+		id: string;
+		accountId: string;
+		account?: AccountDto;
+		dr: number;
+		cr: number;
+		memo?: string;
+	}>;
+	debit: number;
+	credit: number;
+}
+
+export interface DaybookDto {
+	opening: number;
+	closing: number;
+	list: DaybookRowDto[];
+	totals: {
+		debit: number;
+		credit: number;
+	};
+}
+
 export interface TrialBalanceRowDto {
 	id: string;
 	code: string;

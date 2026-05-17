@@ -8,6 +8,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(5000),
   DATABASE_URL: z.string().min(1),
   CORS_ORIGIN: z.string().min(1),
+  TIMEZONE: z.string().default('Asia/Dhaka'),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: z.string().default('15m'),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(8).max(15).default(10)

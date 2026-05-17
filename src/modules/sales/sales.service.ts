@@ -1,5 +1,4 @@
 import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
-import bcrypt from 'bcrypt';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateSalesOrderInput, UpdateSalesOrderInput } from './sales.schema';
@@ -18,8 +17,10 @@ async function voucherNo(tx: Prisma.TransactionClient, date: Date = new Date()) 
   return nextDailySequenceIdForDelegate(tx.voucher, 'voucherNo', 'VCH', date);
 }
 
-function ratePerKg(rateBasis: 'perKg' | 'perMon', rateValue: number) {
-  return rateBasis === 'perKg' ? rateValue : rateValue / 40;
+function ratePerKg(rateBasis: 'perKg' | 'perMon' | 'perBag', rateValue: number, kgPerBag = 0) {
+  if (rateBasis === 'perKg') return rateValue;
+  if (rateBasis === 'perMon') return rateValue / 40;
+  return kgPerBag > 0 ? rateValue / kgPerBag : rateValue / 40;
 }
 
 async function validateLotsForCustomer(items: CreateSalesOrderInput['items'], customerId: string) {
@@ -65,7 +66,7 @@ function buildTotals(items: CreateSalesOrderInput['items'], transport: number, l
   let totalKg = 0;
 
   for (const item of items) {
-    const lineRatePerKg = ratePerKg(item.rateBasis, item.rateValue);
+    const lineRatePerKg = ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0));
     const lineBase = item.qtyKg * lineRatePerKg;
     base += lineBase;
     totalKg += item.qtyKg;
@@ -95,16 +96,16 @@ async function verifyConfirmedSalesPassword(
     throw new HttpError(403, `Confirmed sales ${action} requires password`);
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { passwordHash: true, active: true }
-  });
+  const businessInfo = await prisma.businessInfo.findFirst({
+    orderBy: { createdAt: 'asc' }
+  }) as { operationPass?: string | null } | null;
 
-  if (!user || !user.active) {
-    throw new HttpError(401, 'Invalid user');
+  const expectedPassword = String(businessInfo?.operationPass || '').trim();
+  if (!expectedPassword) {
+    throw new HttpError(500, 'Operation password is not configured');
   }
 
-  const ok = await bcrypt.compare(password, user.passwordHash);
+  const ok = String(password).trim() === expectedPassword;
   if (!ok) {
     throw new HttpError(401, `Incorrect password for confirmed sales ${action}`);
   }
@@ -167,6 +168,7 @@ async function reverseConfirmedSalesOrderImpact(
         vdate: new Date(),
         narration: `Reversal of ${voucher.voucherNo} for SO ${order.soNo}`,
         salesOrderId: order.id,
+        status: 'POSTED'
       }
     });
 
@@ -243,6 +245,16 @@ export async function createSalesOrderDraft(input: CreateSalesOrderInput, userId
       misc: new Prisma.Decimal(input.misc),
       remarks: input.remarks,
       totalsJson: totals,
+      itemsSnapshot: input.items.map((item) => ({
+        lotId: item.lotId,
+        productType: item.productType,
+        qtyKg: Number(item.qtyKg || 0),
+        rateBasis: item.rateBasis,
+        rateValue: Number(item.rateValue || 0),
+        ratePerKg: Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+        lineBase: Number(item.qtyKg || 0) * Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          bagCount: Number(item.bagCount || 0)
+      })),
       createdBy: userId,
       items: {
         create: input.items.map((item) => ({
@@ -252,8 +264,8 @@ export async function createSalesOrderDraft(input: CreateSalesOrderInput, userId
           qtyKg: new Prisma.Decimal(item.qtyKg),
           rateBasis: item.rateBasis,
           rateValue: new Prisma.Decimal(item.rateValue),
-          ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-          lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+          ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
           bagCount: item.bagCount,
         }))
       }
@@ -302,26 +314,19 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
     return prisma.$transaction(async (tx) => {
       await reverseConfirmedSalesOrderImpact(tx, existing, userId);
 
-      // 1) Remove old sales order items (we keep the salesOrder record)
-      await tx.salesOrderItem.deleteMany({ where: { salesOrderId: id } });
+      // load existing items for in-place update
+      const existingItems = await tx.salesOrderItem.findMany({ where: { salesOrderId: id } });
+      const existingById: Record<string, any> = {};
+      existingItems.forEach((it) => (existingById[it.id] = it));
 
-      // 2) Create new items
-      const createdItems = input.items.map((item) => ({
-        lotId: item.lotId,
-        productId: item.productId,
-        productType: item.productType,
-        qtyKg: new Prisma.Decimal(item.qtyKg),
-        rateBasis: item.rateBasis,
-        rateValue: new Prisma.Decimal(item.rateValue),
-        ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-        lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
-        bagCount: item.bagCount
-      }));
+      const keepIds: string[] = [];
+      const createdIds: string[] = [];
 
-      // 3) Validate availability for new items and deduct stock with new stock moves
+      // 2) Validate availability for new/updated items and deduct stock with new stock moves
       const itemResults: Array<{ lotId: string; qtyKg: number }> = [];
       let totalBase = 0;
       let totalKg = 0;
+      const itemsSnapshot: any[] = [];
 
       for (const item of input.items) {
         const lotRow = await tx.lot.findUnique({ where: { id: item.lotId } });
@@ -336,9 +341,58 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
 
         await tx.stockMove.create({ data: { moveNo: await stockMoveNo(tx), lotId: lotRow.id, warehouseId: lotRow.warehouseId, qtyKg: new Prisma.Decimal(-qty), reason: StockMoveReason.SALE, refType: StockRefType.SO, refId: id, memo: `Sale order ${existing.soNo} (edit)`, createdBy: userId, lotLabel: lotRow.label } });
 
-        totalBase += qty * Number(ratePerKg(item.rateBasis, item.rateValue));
+        // update existing item if id provided and found, otherwise create
+        if ((item as any).id && existingById[(item as any).id]) {
+          const upd = await tx.salesOrderItem.update({ where: { id: (item as any).id }, data: {
+            lotId: item.lotId,
+            productId: item.productId,
+            productType: item.productType,
+            qtyKg: new Prisma.Decimal(item.qtyKg),
+            rateBasis: item.rateBasis,
+            rateValue: new Prisma.Decimal(item.rateValue),
+            ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+            bagCount: item.bagCount
+          }});
+          keepIds.push(upd.id);
+        } else {
+          const created = await tx.salesOrderItem.create({ data: {
+            salesOrderId: id,
+            lotId: item.lotId,
+            productId: item.productId,
+            productType: item.productType,
+            qtyKg: new Prisma.Decimal(item.qtyKg),
+            rateBasis: item.rateBasis,
+            rateValue: new Prisma.Decimal(item.rateValue),
+            ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+            bagCount: item.bagCount
+          }});
+          createdIds.push(created.id);
+        }
+
+        totalBase += qty * Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0)));
         totalKg += qty;
         itemResults.push({ lotId: lotRow.id, qtyKg: qty });
+        itemsSnapshot.push({
+          lotId: lotRow.id,
+          productType: item.productType,
+          qtyKg: qty,
+          rateBasis: item.rateBasis,
+          rateValue: Number(item.rateValue || 0),
+          ratePerKg: Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          lineBase: Number((item.qtyKg || 0) * ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          bagCount: item.bagCount || 0,
+          kgPerBag: Number((item as any).kgPerBag || 0),
+          lotLabel: lotRow.label || null,
+          avgCostPerKg: Number(lotRow.avgCostPerKg || 0),
+        });
+      }
+
+      // remove any existing items that were not kept
+      const toDelete = existingItems.filter((it) => !keepIds.includes(it.id) && !createdIds.includes(it.id)).map((i) => i.id);
+      if (toDelete.length) {
+        await tx.salesOrderItem.deleteMany({ where: { id: { in: toDelete } } });
       }
 
       const totalsJsonNew = {
@@ -349,8 +403,8 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
         avgPerKg: totalKg > 0 ? (totalBase + Number(input.transport) + Number(input.loadingUnloading) + Number(input.misc)) / totalKg : 0
       };
 
-      // 4) Insert created items and update salesOrder fields, keep as CONFIRMED and set confirmedAt/confirmedBy
-      const updated = await tx.salesOrder.update({ where: { id }, data: { customerId: input.customerId, customerSnapshot, transport: new Prisma.Decimal(input.transport), loadingUnloading: new Prisma.Decimal(input.loadingUnloading), misc: new Prisma.Decimal(input.misc), remarks: input.remarks, totalsJson: totalsJsonNew, confirmedAt: new Date(), confirmedBy: userId, items: { create: createdItems } }, include: { customer: true, items: { include: { lot: true, product: true } } } });
+      // update sales order totals and snapshot
+      const updated = await tx.salesOrder.update({ where: { id }, data: { customerId: input.customerId, customerSnapshot, transport: new Prisma.Decimal(input.transport), loadingUnloading: new Prisma.Decimal(input.loadingUnloading), misc: new Prisma.Decimal(input.misc), remarks: input.remarks, totalsJson: totalsJsonNew, confirmedAt: new Date(), confirmedBy: userId, itemsSnapshot: itemsSnapshot }, include: { customer: true, items: { include: { lot: true, product: true } } } });
 
       // 5) Create accounting voucher for the new totals (similar to confirmSalesOrder)
       const customerAccountId = (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { id: true, name: true } } } }))?.customer?.id ? (await ensurePartyAccount({ kind: 'customer', refId: (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { id: true, name: true } } } }))!.customer!.id, name: (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { name: true } } } }))!.customer!.name, type: 'party' })).id : null;
@@ -358,7 +412,7 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
       if (customerAccountId) {
         const incomeAccount = await tx.account.upsert({ where: { code: 'AC-INC' }, update: {}, create: { code: 'AC-INC', name: 'Income', type: 'income' } });
 
-        const voucher = await tx.voucher.create({ data: { voucherNo: await voucherNo(tx), vtype: 'journal', vdate: new Date(), narration: `Sales order ${existing.soNo} (edit)`, salesOrderId: id } });
+        const voucher = await tx.voucher.create({ data: { voucherNo: await voucherNo(tx), vtype: 'journal', vdate: new Date(), narration: `Sales order ${existing.soNo} (edit)`, salesOrderId: id, status: 'POSTED' } });
 
         await tx.voucherRow.createMany({ data: [ { voucherId: voucher.id, accountId: customerAccountId, dr: new Prisma.Decimal(totalsJsonNew.total), cr: new Prisma.Decimal(0), memo: `SO ${existing.soNo} receivable (edit)` }, { voucherId: voucher.id, accountId: incomeAccount.id, dr: new Prisma.Decimal(0), cr: new Prisma.Decimal(totalsJsonNew.total), memo: `SO ${existing.soNo} income (edit)` } ] });
       }
@@ -381,6 +435,17 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
         misc: new Prisma.Decimal(input.misc),
         remarks: input.remarks,
         totalsJson: totals,
+        itemsSnapshot: input.items.map((item) => ({
+          lotId: item.lotId,
+          productType: item.productType,
+          qtyKg: Number(item.qtyKg || 0),
+          rateBasis: item.rateBasis,
+          rateValue: Number(item.rateValue || 0),
+          ratePerKg: Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          lineBase: Number(item.qtyKg || 0) * Number(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+          bagCount: Number(item.bagCount || 0),
+          kgPerBag: Number((item as any).kgPerBag || 0),
+        })),
         items: {
           create: input.items.map((item) => ({
             lotId: item.lotId,
@@ -389,8 +454,8 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
             qtyKg: new Prisma.Decimal(item.qtyKg),
             rateBasis: item.rateBasis,
             rateValue: new Prisma.Decimal(item.rateValue),
-            ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis, item.rateValue)),
-            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis, item.rateValue)),
+            ratePerKg: new Prisma.Decimal(ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
+            lineBase: new Prisma.Decimal(item.qtyKg * ratePerKg(item.rateBasis as any, item.rateValue, Number((item as any).kgPerBag || 0))),
             bagCount: item.bagCount
           }))
         }
@@ -474,11 +539,15 @@ export async function confirmSalesOrder(id: string, userId?: string) {
       throw new HttpError(400, 'Sales order has no items');
     }
 
+    const sourceSnapshot = Array.isArray((order as any).itemsSnapshot) ? (order as any).itemsSnapshot : [];
     const itemResults: Array<{ lotId: string; qtyKg: number }> = [];
     let totalBase = 0;
     let totalKg = 0;
+    const itemsSnapshot: any[] = [];
 
-    for (const item of order.items) {
+    for (let index = 0; index < order.items.length; index++) {
+      const item = order.items[index];
+      const snapshotItem = sourceSnapshot[index] || {};
       const lot = await tx.lot.findUnique({ where: { id: item.lotId } });
       if (!lot) {
         throw new HttpError(404, `Lot not found: ${item.lotId}`);
@@ -518,6 +587,19 @@ export async function confirmSalesOrder(id: string, userId?: string) {
       totalBase += Number(item.lineBase);
       totalKg += qtyKg;
       itemResults.push({ lotId: lot.id, qtyKg });
+      itemsSnapshot.push({
+        lotId: lot.id,
+        productType: item.productType,
+        qtyKg,
+        rateBasis: item.rateBasis,
+        rateValue: Number(item.rateValue),
+        ratePerKg: Number(item.ratePerKg || ratePerKg(item.rateBasis as any, Number(item.rateValue || 0), Number(snapshotItem.kgPerBag || 0))),
+        lineBase: Number(item.lineBase || qtyKg * Number(item.ratePerKg || 0)),
+        bagCount: Number(snapshotItem.bagCount || item.bagCount || 0),
+        kgPerBag: Number(snapshotItem.kgPerBag || 0),
+        lotLabel: lot.label || null,
+        avgCostPerKg: Number(lot.avgCostPerKg || 0),
+      });
     }
 
     const totalsJson = {
@@ -534,7 +616,8 @@ export async function confirmSalesOrder(id: string, userId?: string) {
         status: 'CONFIRMED',
         confirmedAt: new Date(),
         confirmedBy: userId,
-        totalsJson
+        totalsJson,
+        itemsSnapshot: itemsSnapshot
       },
       include: {
         customer: true,
@@ -561,6 +644,7 @@ export async function confirmSalesOrder(id: string, userId?: string) {
           vdate: new Date(),
           narration: `Sales order ${order.soNo}`,
           salesOrderId: order.id,
+          status: 'POSTED'
         },
       });
 

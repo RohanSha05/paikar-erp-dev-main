@@ -23,6 +23,8 @@ export async function getDaybook(req: Request, res: Response) {
 		return res.json({
 			success: true,
 			data: {
+				opening: 0,
+				closing: 0,
 				list: [],
 				totals: { debit: 0, credit: 0 },
 			},

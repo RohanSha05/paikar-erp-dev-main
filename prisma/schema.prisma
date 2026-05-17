@@ -1,6 +1,6 @@
 model RetailPurchaseDraft {
   id            String   @id @default(uuid())
-  date          DateTime
+  date          DateTime @db.Timestamp(3)
   sellerId      String?
   seller        Seller?  @relation(fields: [sellerId], references: [id])
   market        String?
@@ -22,8 +22,8 @@ model RetailPurchaseDraft {
 
   poId          String? // Link to finalized PurchaseOrder
   createdBy     String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 
   @@index([status, date])
   @@index([sellerId])
@@ -109,8 +109,8 @@ model User {
   passwordHash  String
   role          UserRole @default(OPERATOR)
   active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 }
 
 model Seller {
@@ -122,8 +122,8 @@ model Seller {
   phone         String?
   nidNumber String?
 emergencyPhone String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 
   purchaseOrders PurchaseOrder[]
   retailPurchaseDrafts RetailPurchaseDraft[]
@@ -136,8 +136,8 @@ model Driver {
   truckNo    String?
   licenseNo  String?
   active     Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @db.Timestamp(3) @default(now())
+  updatedAt  DateTime @db.Timestamp(3) @updatedAt
 
   trips      DriverTrip[]
 
@@ -149,16 +149,16 @@ model DriverTrip {
   driverId   String
   driver     Driver   @relation(fields: [driverId], references: [id], onDelete: Restrict)
   driverName String?
-  date       DateTime
+  date       DateTime @db.Timestamp(3)
   route      String?
   truckNo    String?
   amount     Decimal  @db.Decimal(18, 4)
   memo       String?
   settled    Boolean  @default(false)
-  settledAt  DateTime?
+  settledAt  DateTime? @db.Timestamp(3)
   poId       String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @db.Timestamp(3) @default(now())
+  updatedAt  DateTime @db.Timestamp(3) @updatedAt
 
   @@index([driverId, date])
   @@index([createdAt])
@@ -174,8 +174,8 @@ model Customer {
   type          String?
   nidNumber String?
   emergencyPhone String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 
   salesOrders   SalesOrder[]
   destinationPurchaseOrders PurchaseOrder[] @relation("PurchaseOrderDestinationCustomer")
@@ -188,8 +188,8 @@ model Product {
   category      String?
   unit          String   @default("bag")
   active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 
   purchaseItems PurchaseOrderItem[]
   lots          Lot[]
@@ -208,8 +208,8 @@ model Party {
   address       String?
   phone         String?
   active        Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @db.Timestamp(3) @default(now())
+  updatedAt     DateTime  @db.Timestamp(3) @updatedAt
 
   @@index([type])
   @@index([active])
@@ -221,8 +221,8 @@ model Warehouse {
   name          String
   address       String?
   active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @db.Timestamp(3) @default(now())
+  updatedAt     DateTime @db.Timestamp(3) @updatedAt
 
   lots          Lot[]
   stockMoves    StockMove[]
@@ -266,8 +266,8 @@ model PurchaseOrder {
   route         String?
   driverTripId  String?
 
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt     DateTime        @db.Timestamp(3) @default(now())
+  updatedAt     DateTime        @db.Timestamp(3) @updatedAt
 
   items         PurchaseOrderItem[]
   vouchers      Voucher[]
@@ -298,8 +298,8 @@ model PurchaseOrderItem {
   destinationType      String?
   destinationRefId     String?
 
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  createdAt            DateTime       @db.Timestamp(3) @default(now())
+  updatedAt            DateTime       @db.Timestamp(3) @updatedAt
 }
 
 model Lot {
@@ -319,8 +319,8 @@ model Lot {
   sourcePoItemId String?
   sourcePo      PurchaseOrder? @relation(fields: [sourcePoId], references: [id])
 
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime      @db.Timestamp(3) @default(now())
+  updatedAt     DateTime      @db.Timestamp(3) @updatedAt
 
   stockMoves    StockMove[]
   soItems       SalesOrderItem[]
@@ -345,7 +345,7 @@ model StockMove {
   memo          String?
   createdBy     String?
   lotLabel      String?
-  createdAt     DateTime      @default(now())
+  createdAt     DateTime      @db.Timestamp(3) @default(now())
 
   @@index([refType, refId])
   @@index([lotId, createdAt])
@@ -359,6 +359,7 @@ model SalesOrder {
 
   customerId        String
   customerSnapshot  Json
+  itemsSnapshot     Json?
 
   transport         Decimal           @db.Decimal(14, 2) @default(0)
   loadingUnloading  Decimal           @db.Decimal(14, 2) @default(0)
@@ -367,12 +368,12 @@ model SalesOrder {
   remarks           String?
   totalsJson        Json?
 
-  confirmedAt       DateTime?
+  confirmedAt       DateTime? @db.Timestamp(3)
   confirmedBy       String?
   createdBy         String?
 
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  createdAt         DateTime          @db.Timestamp(3) @default(now())
+  updatedAt         DateTime          @db.Timestamp(3) @updatedAt
 
   customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
   items             SalesOrderItem[]
@@ -395,8 +396,8 @@ model SalesOrderItem {
   ratePerKg         Decimal     @db.Decimal(14, 4)
   lineBase          Decimal     @db.Decimal(14, 2)
   bagCount          Int         @default(0)
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  createdAt         DateTime    @db.Timestamp(3) @default(now())
+  updatedAt         DateTime    @db.Timestamp(3) @updatedAt
 
   salesOrder        SalesOrder  @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
   lot               Lot         @relation(fields: [lotId], references: [id], onDelete: Restrict)
@@ -417,8 +418,8 @@ model Account {
   bankInfo      String?
   opening       Decimal?      @db.Decimal(18, 4)
   active        Boolean       @default(true)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime      @db.Timestamp(3) @default(now())
+  updatedAt     DateTime      @db.Timestamp(3) @updatedAt
 
   voucherRows   VoucherRow[]
 }
@@ -430,13 +431,13 @@ model Investor {
   address       String?
   nidNo         String?
   nomineeName   String?
-  startDate     DateTime?
+  startDate     DateTime? @db.Timestamp(3)
   photoUrl      String?
   agreementPct  Float?
   notes         String?
   active        Boolean        @default(true)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt     DateTime       @db.Timestamp(3) @default(now())
+  updatedAt     DateTime       @db.Timestamp(3) @updatedAt
 
   txns          InvestorTxn[]
 }
@@ -446,12 +447,12 @@ model InvestorTxn {
   investorId    String
   investor      Investor       @relation(fields: [investorId], references: [id], onDelete: Cascade)
   kind          String
-  date          DateTime
+  date          DateTime @db.Timestamp(3)
   amount        Float
   instrument    String?
   memo          String?
   voucherId     String?
-  createdAt     DateTime       @default(now())
+  createdAt     DateTime       @db.Timestamp(3) @default(now())
 
   @@index([investorId, date])
   @@index([createdAt])
@@ -461,7 +462,7 @@ model Voucher {
   id              String         @id @default(uuid())
   voucherNo       String         @unique
   vtype           String
-  vdate           DateTime
+  vdate           DateTime @db.Timestamp(3)
   narration       String?
   purchaseOrderId String?
   purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
@@ -469,10 +470,10 @@ model Voucher {
   locked          Boolean        @default(false)
   status          VoucherStatus  @default(DRAFT)
   userId          String?
-  postedAt        DateTime?
-  deletedAt       DateTime?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  postedAt        DateTime? @db.Timestamp(3)
+  deletedAt       DateTime? @db.Timestamp(3)
+  createdAt       DateTime       @db.Timestamp(3) @default(now())
+  updatedAt       DateTime       @db.Timestamp(3) @updatedAt
 
   rows                  VoucherRow[]
   auditLogs             AuditLog[]
@@ -496,7 +497,7 @@ model VoucherRow {
   cr              Decimal   @db.Decimal(18, 4)
   memo            String?
 
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime  @db.Timestamp(3) @default(now())
 
   @@index([accountId])
 }
@@ -511,9 +512,9 @@ model RecurringExpenseTemplate {
   dayOfMonth       Int?
   active           Boolean  @default(true)
   notes            String?
-  lastPostedDate   DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  lastPostedDate   DateTime? @db.Timestamp(3)
+  createdAt        DateTime @db.Timestamp(3) @default(now())
+  updatedAt        DateTime @db.Timestamp(3) @updatedAt
 
   posts            RecurringExpensePost[]
 
@@ -528,7 +529,7 @@ model RecurringExpensePost {
   month      Int
   voucherId  String
   voucherNo  String
-  postedAt   DateTime @default(now())
+  postedAt   DateTime @db.Timestamp(3) @default(now())
 
   @@unique([templateId, year, month])
 }
@@ -542,7 +543,7 @@ model AuditLog {
   userName      String?
   changes       Json?
   reason        String?
-  createdAt     DateTime         @default(now())
+  createdAt     DateTime         @db.Timestamp(3) @default(now())
 
   @@index([voucherId, createdAt])
   @@index([createdAt])
@@ -556,7 +557,7 @@ model VoucherReversal {
   reversingVoucher      Voucher  @relation("ReversingVoucher", fields: [reversingVoucherId], references: [id], onDelete: Cascade)
   reason                String?
   createdBy             String?
-  createdAt             DateTime @default(now())
+  createdAt             DateTime @db.Timestamp(3) @default(now())
 
   @@index([originalVoucherId])
   @@index([reversingVoucherId])
@@ -570,8 +571,9 @@ model BusinessInfo {
   address               String?
   phone1                String?
   phone2                String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  operationPass         String?
+  createdAt             DateTime @db.Timestamp(3) @default(now())
+  updatedAt             DateTime @db.Timestamp(3) @updatedAt
 
   @@index([createdAt])
 }

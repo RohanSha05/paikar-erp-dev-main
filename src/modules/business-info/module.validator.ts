@@ -8,7 +8,8 @@ export const createOrUpdateBusinessInfoSchema = z.object({
 		additionalProprietor: z.string().max(255).nullish(),
 		address: z.string().max(500).nullish(),
 		phone1: z.string().max(40).nullish(),
-		phone2: z.string().max(40).nullish()
+		phone2: z.string().max(40).nullish(),
+		operationPass: z.string().max(255).nullish()
 	})
 });
 
@@ -23,7 +24,8 @@ export const updateBusinessInfoSchema = z.object({
 			additionalProprietor: z.string().max(255).nullish(),
 			address: z.string().max(500).nullish(),
 			phone1: z.string().max(40).nullish(),
-			phone2: z.string().max(40).nullish()
+			phone2: z.string().max(40).nullish(),
+			operationPass: z.string().max(255).nullish()
 		})
 		.refine((data) => Object.keys(data).length > 0, {
 			message: 'At least one field is required'

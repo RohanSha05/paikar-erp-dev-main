@@ -6,4 +6,5 @@ export type CreateOrUpdateBusinessInfoInput = {
 	address?: string | null;
 	phone1?: string | null;
 	phone2?: string | null;
+	operationPass?: string | null;
 };

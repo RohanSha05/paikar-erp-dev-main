@@ -4,6 +4,7 @@ import { HttpError } from '../../common/httpError';
 import { CreateDriverTripInput, UpdateDriverTripInput } from './module.types';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { parseDhakaDate } from '../../common/utils/date';
 
 function normalize(value?: string | null) {
 	if (value === null) return null;
@@ -19,7 +20,7 @@ async function generateVoucherNo(tx: Prisma.TransactionClient, date: Date) {
 }
 
 function parseDate(value: string) {
-	const d = new Date(value);
+	const d = parseDhakaDate(value);
 	if (Number.isNaN(d.getTime())) {
 		throw new HttpError(400, 'Invalid trip date');
 	}
@@ -126,6 +127,7 @@ async function postTripVoucher(
 			vtype: 'journal',
 			vdate: trip.date,
 			narration: options?.memo || `Driver trip ${trip.id}`,
+			status: 'POSTED'
 		},
 	});
 

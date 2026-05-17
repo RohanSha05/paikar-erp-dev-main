@@ -3,6 +3,7 @@ import { Investor, InvestorTxn, InvestorBalance } from './module.types';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { createVoucher } from '../cashbook/module.service';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { parseDhakaDate } from '../../common/utils/date';
 
 export async function listInvestors(): Promise<Investor[]> {
   return prisma.investor.findMany({
@@ -39,7 +40,7 @@ export async function createInvestor(data: {
       address: data.address,
       nidNo: effectiveNidNo,
       nomineeName: data.nomineeName,
-      startDate: data.startDate ? new Date(data.startDate) : undefined,
+      startDate: data.startDate ? parseDhakaDate(data.startDate) : undefined,
       photoUrl: data.photoUrl,
       agreementPct: effectiveAgreementPct,
       notes: data.notes,
@@ -68,7 +69,7 @@ export async function updateInvestor(id: string, data: Partial<Investor>): Promi
   const effectiveAgreementPct = data.agreementPct ?? anyData.profitSharePct;
   const effectiveStartDate =
     typeof anyData.startDate === 'string'
-      ? new Date(anyData.startDate)
+      ? parseDhakaDate(anyData.startDate)
       : anyData.startDate;
 
   const investor = await prisma.investor.update({
@@ -182,7 +183,7 @@ export async function createInvestorTxn(data: {
       id,
       investorId: data.investorId,
       kind: data.kind,
-      date: new Date(data.date),
+      date: parseDhakaDate(data.date),
       amount: data.amount,
       instrument: data.instrument || payAccountId,
       memo: data.memo,

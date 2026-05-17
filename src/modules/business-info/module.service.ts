@@ -46,7 +46,8 @@ export async function createOrUpdateBusinessInfo(input: CreateOrUpdateBusinessIn
 			additionalProprietor: normalize(input.additionalProprietor),
 			address: normalize(input.address),
 			phone1: normalize(input.phone1),
-			phone2: normalize(input.phone2)
+			phone2: normalize(input.phone2),
+			operationPass: normalize(input.operationPass)
 		}
 	});
 
@@ -69,7 +70,8 @@ export async function updateBusinessInfo(id: string, input: CreateOrUpdateBusine
 			additionalProprietor: input.additionalProprietor !== undefined ? normalize(input.additionalProprietor) : existing.additionalProprietor,
 			address: input.address !== undefined ? normalize(input.address) : existing.address,
 			phone1: input.phone1 !== undefined ? normalize(input.phone1) : existing.phone1,
-			phone2: input.phone2 !== undefined ? normalize(input.phone2) : existing.phone2
+			phone2: input.phone2 !== undefined ? normalize(input.phone2) : existing.phone2,
+			operationPass: input.operationPass !== undefined ? normalize(input.operationPass) : existing.operationPass
 		}
 	});
 
