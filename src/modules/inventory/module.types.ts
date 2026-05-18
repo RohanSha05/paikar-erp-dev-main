@@ -50,6 +50,7 @@ export type InventoryReportRow = {
 	id: string;
 	createdAt: string;
 	transactionType: 'purchase' | 'sale';
+	partyName?: string;
 	poNo?: string;
 	soNo?: string;
 	sellerId?: string;
@@ -63,6 +64,8 @@ export type InventoryReportRow = {
 	warehouseId?: string;
 	warehouseName?: string;
 	qtyKg: number;
+	bagCount: number;
+	mon: number;
 	unitCost: number;
 	totalPrice: number;
 	drKg: number;

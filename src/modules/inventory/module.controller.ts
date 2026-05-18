@@ -87,6 +87,7 @@ function parseReportQuery(query: Request['query']): InventoryReportQuery {
 		partyId: firstString(query.partyId),
 		warehouseId: firstString(query.warehouseId),
 		productId: firstString(query.productId),
+		productCategory: firstString(query.productCategory),
 		q: firstString(query.q),
 		page: toPositiveIntLocal(query.page, 1),
 		pageSize: toPositiveIntLocal(query.pageSize, 100),

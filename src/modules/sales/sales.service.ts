@@ -406,6 +406,20 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
       // update sales order totals and snapshot
       const updated = await tx.salesOrder.update({ where: { id }, data: { customerId: input.customerId, customerSnapshot, transport: new Prisma.Decimal(input.transport), loadingUnloading: new Prisma.Decimal(input.loadingUnloading), misc: new Prisma.Decimal(input.misc), remarks: input.remarks, totalsJson: totalsJsonNew, confirmedAt: new Date(), confirmedBy: userId, itemsSnapshot: itemsSnapshot }, include: { customer: true, items: { include: { lot: true, product: true } } } });
 
+      // Recalculate availableKg for all affected lots from their stock moves (critical fix for multi-edit accuracy)
+      const affectedLotIds = Array.from(new Set(itemResults.map(r => r.lotId)));
+      for (const lotId of affectedLotIds) {
+        const sumRow: any = await tx.stockMove.aggregate({
+          where: { lotId },
+          _sum: { qtyKg: true }
+        });
+        const computedAvailable = Number(sumRow._sum?.qtyKg || 0);
+        await tx.lot.update({
+          where: { id: lotId },
+          data: { availableKg: new Prisma.Decimal(computedAvailable) }
+        });
+      }
+
       // 5) Create accounting voucher for the new totals (similar to confirmSalesOrder)
       const customerAccountId = (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { id: true, name: true } } } }))?.customer?.id ? (await ensurePartyAccount({ kind: 'customer', refId: (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { id: true, name: true } } } }))!.customer!.id, name: (await tx.salesOrder.findUnique({ where: { id }, select: { customer: { select: { name: true } } } }))!.customer!.name, type: 'party' })).id : null;
 

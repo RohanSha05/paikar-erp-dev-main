@@ -13,8 +13,65 @@ async function generateDriverId() {
 }
 
 export async function listDrivers() {
-	return prisma.driver.findMany({
+	const drivers = await prisma.driver.findMany({
 		orderBy: { createdAt: 'desc' }
+	});
+
+	if (!drivers.length) return [];
+
+	const driverIds = drivers.map((driver) => driver.id);
+	const accounts = await prisma.account.findMany({
+		where: {
+			partyKind: 'driver',
+			partyRefId: { in: driverIds },
+		},
+		select: {
+			id: true,
+			partyRefId: true,
+			opening: true,
+		},
+	});
+
+	const accountIds = accounts.map((account) => account.id);
+	const ledgerSums = accountIds.length
+		? await prisma.voucherRow.groupBy({
+				by: ['accountId'],
+				where: {
+					accountId: { in: accountIds },
+					voucher: { status: 'POSTED' },
+				},
+				_sum: {
+					dr: true,
+					cr: true,
+				},
+		  })
+		: [];
+
+	const ledgerByAccountId = new Map(
+		ledgerSums.map((row) => [
+			row.accountId,
+			Number(row._sum.dr || 0) - Number(row._sum.cr || 0),
+		]),
+	);
+
+	const accountByDriverId = new Map(
+		accounts.map((account) => [account.partyRefId, account]),
+	);
+
+	return drivers.map((driver) => {
+		const account = accountByDriverId.get(driver.id);
+		const opening = Number(account?.opening || 0);
+		const ledger = account ? Number(ledgerByAccountId.get(account.id) || 0) : 0;
+		const balance = opening + ledger;
+		const pawna = balance > 0 ? balance : 0;
+		const dena = balance < 0 ? Math.abs(balance) : 0;
+
+		return {
+			...driver,
+			balance,
+			pawna,
+			dena,
+		};
 	});
 }
 

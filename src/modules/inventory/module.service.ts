@@ -464,6 +464,51 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 	const purchaseIds = purchaseOrderIds.map((row) => row.id);
 	const salesIds = salesOrderIds.map((row) => row.id);
 
+	const [purchaseOrders, salesOrdersWithItems] = await Promise.all([
+		purchaseIds.length
+			? prisma.purchaseOrder.findMany({
+				where: { id: { in: purchaseIds } },
+				select: {
+					id: true,
+					items: {
+						select: {
+							id: true,
+							bagCount: true,
+						},
+					},
+				}
+			})
+			: Promise.resolve([] as Array<{ id: string; items: Array<{ id: string; bagCount: number }> }>),
+		salesIds.length
+			? prisma.salesOrder.findMany({
+				where: { id: { in: salesIds } },
+				select: {
+					id: true,
+					items: {
+						select: {
+							lotId: true,
+							bagCount: true,
+						},
+					},
+				}
+			})
+			: Promise.resolve([] as Array<{ id: string; items: Array<{ lotId: string; bagCount: number }> }>)
+	]);
+
+	const purchaseBagCountByItemId = new Map<string, number>();
+	for (const order of purchaseOrders) {
+		for (const item of order.items) {
+			purchaseBagCountByItemId.set(item.id, Number(item.bagCount || 0));
+		}
+	}
+
+	const saleBagCountByLotId = new Map<string, number>();
+	for (const order of salesOrdersWithItems) {
+		for (const item of order.items) {
+			saleBagCountByLotId.set(item.lotId, Number(item.bagCount || 0));
+		}
+	}
+
 	const refFilter: Prisma.StockMoveWhereInput | undefined =
 		transactionType === 'purchase'
 			? { refType: 'PO', refId: { in: purchaseIds.length ? purchaseIds : ['__none__'] } }
@@ -481,6 +526,7 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 			{ reason: { in: ['PURCHASE', 'SALE'] } },
 			query.warehouseId ? { warehouseId: query.warehouseId } : {},
 			query.productId ? { lot: { productId: query.productId } } : {},
+			query.productCategory ? { lot: { product: { category: { equals: query.productCategory, mode: 'insensitive' } } } } : {},
 			query.q
 				? {
 					OR: [
@@ -534,7 +580,7 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 	]);
 
 	const saleRowIds = rows.filter((row) => row.refType === 'SO').map((row) => row.refId);
-	const salesOrders = saleRowIds.length
+	const salesOrderHeaders = saleRowIds.length
 		? await prisma.salesOrder.findMany({
 			where: { id: { in: saleRowIds } },
 			select: {
@@ -546,7 +592,7 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 			}
 		})
 		: [];
-	const salesOrderById = Object.fromEntries(salesOrders.map((order) => [order.id, order]));
+	const salesOrderById = Object.fromEntries(salesOrderHeaders.map((order) => [order.id, order]));
 
 	const purchaseRows = periodRows.filter((row) => row.refType === 'PO');
 	const saleRows = periodRows.filter((row) => row.refType === 'SO');
@@ -588,11 +634,15 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 		const isPurchase = m.refType === 'PO';
 		const so = isPurchase ? null : salesOrderById[m.refId];
 		const po = m.lot?.sourcePo;
+		const bagCount = isPurchase
+			? purchaseBagCountByItemId.get(String(m.lot?.sourcePoItemId || '')) || 0
+			: saleBagCountByLotId.get(m.lotId) || 0;
 
 		return {
 			id: m.id,
 			createdAt: m.createdAt,
 			transactionType: isPurchase ? 'purchase' : 'sale',
+			partyName: isPurchase ? po?.seller?.name : so?.customer?.name || (so?.customerSnapshot as { name?: string } | null | undefined)?.name,
 			poNo: po?.poNo,
 			soNo: so?.soNo,
 			sellerId: po?.sellerId,
@@ -606,6 +656,8 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 			warehouseId: m.warehouseId,
 			warehouseName: m.warehouse?.name || '',
 			qtyKg,
+			bagCount,
+			mon: bagCount > 0 ? bagCount : qtyKg / 40,
 			unitCost,
 			totalPrice,
 			drKg: isPurchase ? qtyKg : 0,

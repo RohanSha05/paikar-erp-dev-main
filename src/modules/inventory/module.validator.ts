@@ -53,6 +53,7 @@ export const inventoryReportSchema = z.object({
 		partyId: z.string().uuid().optional(),
 		warehouseId: z.string().uuid().optional(),
 		productId: z.string().uuid().optional(),
+		productCategory: z.string().trim().max(100).optional(),
 		q: z.string().trim().max(100).optional(),
 		page: z.coerce.number().int().min(1).optional().default(1),
 		pageSize: z.coerce.number().int().min(1).max(1000).optional().default(100),

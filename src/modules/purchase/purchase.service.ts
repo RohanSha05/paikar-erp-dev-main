@@ -778,23 +778,10 @@ async function reversePurchaseOrderImpact(
   const prevMoves = await tx.stockMove.findMany({
     where: { refType: StockRefType.PO, refId: po.id }
   });
-
-  for (const move of prevMoves) {
-    const qty = Number(move.qtyKg || 0);
-
-    await tx.stockMove.create({
-      data: {
-        moveNo: await stockMoveNo(tx),
-        lotId: move.lotId,
-        warehouseId: move.warehouseId,
-        qtyKg: new Prisma.Decimal(-qty),
-        reason: StockMoveReason.ADJUSTMENT,
-        refType: StockRefType.PO,
-        refId: po.id,
-        memo: `Reversal of ${move.moveNo} for PO ${po.poNo}`,
-        createdBy: userId,
-      }
-    });
+  // Remove previous stock moves created for this PO so they no longer appear
+  // in inventory reports, then later re-create moves for the updated PO.
+  if (prevMoves.length) {
+    await tx.stockMove.deleteMany({ where: { refType: StockRefType.PO, refId: po.id } });
   }
 
   // Reverse all vouchers for this PO
@@ -973,7 +960,7 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
           sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+          meta: { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount) }
         },
       });
       lotId = existingLot.id;
@@ -998,7 +985,7 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
           sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.actualKgPerBag), bagCount: Number(item.bagCount) }
+          meta: { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount) }
         },
       });
       lotId = lot.id;
