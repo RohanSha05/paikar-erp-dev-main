@@ -6,7 +6,7 @@ import { ensurePartyAccount } from '../accounting/party-account';
 export async function listCustomers() {
   return prisma.customer.findMany({
     orderBy: { createdAt: 'desc' }
-  });
+  }); 
 }
 
 export async function createCustomer(input: CreateCustomerInput) {
@@ -35,7 +35,7 @@ export async function createCustomer(input: CreateCustomerInput) {
 
   return customer;
 }
-
+ 
 export async function updateCustomer(id: string, input: UpdateCustomerInput) {
   const existingCustomer = await prisma.customer.findUnique({ where: { id } });
   if (!existingCustomer) {

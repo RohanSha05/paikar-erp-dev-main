@@ -3,6 +3,7 @@ import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import { dhakaDayEnd, dhakaDayStart } from '../../common/utils/date';
+import { getRemainingBagCount, syncLotMetaBagBalance } from '../../common/utils/lot-balance';
 import {
 	AdjustStockInput,
 	TransferStockInput,
@@ -100,7 +101,8 @@ export async function adjustStock(input: AdjustStockInput) {
 		const updatedLot = await tx.lot.update({
 			where: { id: lot.id },
 			data: {
-				availableKg: new Prisma.Decimal(nextQty)
+				availableKg: new Prisma.Decimal(nextQty),
+				meta: syncLotMetaBagBalance((lot as any).meta, nextQty)
 			}
 		});
 
@@ -178,7 +180,8 @@ export async function transferStock(input: TransferStockInput) {
 		const updatedSourceLot = await tx.lot.update({
 			where: { id: sourceLot.id },
 			data: {
-				availableKg: new Prisma.Decimal(nextSourceQty)
+				availableKg: new Prisma.Decimal(nextSourceQty),
+				meta: syncLotMetaBagBalance((sourceLot as any).meta, nextSourceQty)
 			}
 		});
 
@@ -219,7 +222,8 @@ export async function transferStock(input: TransferStockInput) {
 			where: { id: destinationLot.id },
 			data: {
 				availableKg: new Prisma.Decimal(dstNextQty),
-				avgCostPerKg: new Prisma.Decimal(dstNextAvg)
+				avgCostPerKg: new Prisma.Decimal(dstNextAvg),
+				meta: syncLotMetaBagBalance((destinationLot as any).meta, dstNextQty, (destinationLot as any)?.meta?.kgPerBag, (destinationLot as any)?.meta?.initialBagCount)
 			}
 		});
 
@@ -307,6 +311,8 @@ function toNumber(v: unknown) {
 	return Number(v || 0);
 }
 
+const KG_PER_MON = 40;
+
 export async function getInventoryDashboard(query: InventoryDashboardQuery) {
 	const page = Math.max(1, query.page || 1);
 	const pageSize = Math.min(100, Math.max(1, query.pageSize || 20));
@@ -339,7 +345,17 @@ export async function getInventoryDashboard(query: InventoryDashboardQuery) {
 			skip,
 			take: pageSize,
 			orderBy: { [sortBy]: sortDir },
-			include: {
+			select: {
+				id: true,
+				lotNo: true,
+				label: true,
+				productId: true,
+				warehouseId: true,
+				availableKg: true,
+				avgCostPerKg: true,
+				meta: true,
+				createdAt: true,
+				updatedAt: true,
 				product: { select: { id: true, name: true } },
 				warehouse: { select: { id: true, name: true } }
 			}
@@ -406,6 +422,10 @@ export async function getInventoryDashboard(query: InventoryDashboardQuery) {
 			warehouseName: lot.warehouse?.name || '',
 			availableKg: toNumber(lot.availableKg),
 			avgCostPerKg: toNumber(lot.avgCostPerKg),
+			kgPerBag: toNumber((lot.meta as any)?.kgPerBag),
+			bagCount: toNumber((lot.meta as any)?.bagCount),
+			remainingBagCount: getRemainingBagCount(lot.availableKg, lot.meta as any),
+			initialBagCount: toNumber((lot.meta as any)?.initialBagCount),
 			value: toNumber(lot.availableKg) * toNumber(lot.avgCostPerKg),
 			createdAt: lot.createdAt,
 			updatedAt: lot.updatedAt
@@ -627,6 +647,8 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 	const closingQtyKg = openingQtyKg + totalInKg - totalOutKg;
 	const closingAmount = openingAmount + periodTotals.totalDrAmount - periodTotals.totalCrAmount;
 
+	// (closing bag/mon will be computed from opening + purchased - sold below)
+
 	const items = rows.map((m) => {
 		const qtyKg = Math.abs(toNumber(m.qtyKg));
 		const unitCost = toNumber(m.lot?.avgCostPerKg);
@@ -671,6 +693,27 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 		};
 	});
 
+	// Compute bag/mon/price totals from mapped items for period
+	let periodPurchasedBags = 0;
+	let periodSoldBags = 0;
+	let periodPurchasedPrice = 0;
+	let periodSoldPrice = 0;
+	for (const it of items) {
+		// Only count explicit bag counts from PO/SO items. Do NOT derive fractional bags from kg.
+		const bags = Number(it.bagCount || 0);
+		if (it.transactionType === 'purchase') {
+			periodPurchasedBags += bags;
+			periodPurchasedPrice += Number(it.drAmount || 0);
+		} else {
+			periodSoldBags += bags;
+			periodSoldPrice += Number(it.crAmount || 0);
+		}
+	}
+
+	const netQtyKg = totalInKg - totalOutKg;
+	const netAmount = periodTotals.totalDrAmount - periodTotals.totalCrAmount;
+	const netBagCount = Math.round(periodPurchasedBags) - Math.round(periodSoldBags);
+
 	return {
 		summary: {
 			openingQtyKg,
@@ -681,8 +724,15 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 			totalCrAmount: periodTotals.totalCrAmount,
 			totalInKg,
 			totalOutKg,
-			closingAmount,
-			closingQtyKg,
+			closingAmount: netAmount,
+			closingQtyKg: netQtyKg,
+			totalPurchasedBags: Math.round(periodPurchasedBags),
+			totalSoldBags: Math.round(periodSoldBags),
+			closingBagCount: netBagCount,
+			closingMon: netBagCount,
+			purchasedPrice: periodPurchasedPrice,
+			soldPrice: periodSoldPrice,
+			closingPriceByFlow: netAmount,
 			totalLots: new Set(periodRows.map((row) => row.lotId)).size,
 			purchaseCount: purchaseRows.length,
 			saleCount: saleRows.length
@@ -713,7 +763,14 @@ export async function reconcileAllLots() {
 			const old = Number(l.availableKg || 0);
 			const changed = Math.abs(old - computed) > 0.00001;
 			if (changed) {
-				await tx.lot.update({ where: { id: l.id }, data: { availableKg: new Prisma.Decimal(computed) } });
+				const current = await tx.lot.findUnique({ where: { id: l.id }, select: { meta: true } });
+				await tx.lot.update({
+					where: { id: l.id },
+					data: {
+						availableKg: new Prisma.Decimal(computed),
+						meta: syncLotMetaBagBalance(current?.meta as any, computed)
+					}
+				});
 			}
 			results.push({ lotId: l.id, label: l.label, old, computed, changed });
 		}

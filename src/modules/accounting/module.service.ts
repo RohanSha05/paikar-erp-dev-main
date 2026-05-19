@@ -199,6 +199,38 @@ async function getDaybookOpening(dateISO: string) {
 	}, 0);
 }
 
+async function getCashbookOpening(dateISO: string) {
+	const openingDate = dhakaDayStart(dateISO);
+	const vouchers = await prisma.voucher.findMany({
+		where: {
+			status: 'POSTED',
+			vdate: { lt: openingDate },
+		},
+		include: {
+			rows: {
+				include: {
+					account: true,
+				},
+			},
+		},
+		orderBy: [
+			{ vdate: 'asc' },
+			{ createdAt: 'asc' },
+		],
+	});
+
+	const sideForVoucher = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
+
+	return vouchers.reduce((sum, voucher) => {
+		// Filter to only bank and cash accounts
+		const instrumentRows = voucher.rows.filter((row) => row.account && (row.account.type === 'bank' || row.account.type === 'cash'));
+		const debit = instrumentRows.reduce((rowSum, row) => rowSum + toNumber(row.dr), 0);
+		const credit = instrumentRows.reduce((rowSum, row) => rowSum + toNumber(row.cr), 0);
+		const amount = Math.max(debit, credit);
+		return sideForVoucher(voucher.vtype) === 'debit' ? sum + amount : sum - amount;
+	}, 0);
+}
+
 export async function listAccounts(filterByType?: string): Promise<AccountDto[]> {
 	const accounts = await prisma.account.findMany({
 		where: {
@@ -506,19 +538,32 @@ export async function createAccount(input: CreateAccountInput): Promise<AccountD
 export async function getDaybook(dateISO: string) {
 	const vouchers = await fetchVouchers(dateISO, dateISO);
 	const opening = await getDaybookOpening(dateISO);
-	const daybookSide = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
+	const daybookSide = (voucher: { vtype: string; narration?: string | null }) => {
+		if (voucher.vtype === 'payment') {
+			return 'credit';
+		}
+
+		if (voucher.vtype === 'journal' && (voucher.narration || '').includes('PO-')) {
+			return 'credit';
+		}
+
+		return 'debit';
+	};
 	const list = vouchers.map((voucher) => {
-		const debit = voucher.rows.reduce((sum, row) => sum + toNumber(row.dr), 0);
-		const credit = voucher.rows.reduce((sum, row) => sum + toNumber(row.cr), 0);
+		// Filter out rows with party accounts
+		const nonPartyRows = voucher.rows.filter((row) => row.account && row.account.type !== 'party');
+		
+		const debit = nonPartyRows.reduce((sum, row) => sum + toNumber(row.dr), 0);
+		const credit = nonPartyRows.reduce((sum, row) => sum + toNumber(row.cr), 0);
 		const amount = Math.max(debit, credit);
-		const side = daybookSide(voucher.vtype);
+		const side = daybookSide(voucher);
 		return {
 			id: voucher.id,
 			voucherNo: voucher.voucherNo,
 			vtype: voucher.vtype,
 			vdate: tzDate(voucher.vdate),
 			narration: voucher.narration,
-			rows: voucher.rows.map((row) => ({
+			rows: nonPartyRows.map((row) => ({
 				id: row.id,
 				accountId: row.accountId,
 				account: row.account ? mapAccount(row.account) : undefined,
@@ -530,6 +575,55 @@ export async function getDaybook(dateISO: string) {
 			credit: side === 'credit' ? amount : 0,
 		};
 	});
+	const totals = {
+		debit: list.reduce((sum, item) => sum + item.debit, 0),
+		credit: list.reduce((sum, item) => sum + item.credit, 0),
+	};
+	const closing = opening + totals.debit - totals.credit;
+
+	return {
+		opening,
+		closing,
+		list,
+		totals,
+	};
+}
+
+export async function getCashbook(dateISO: string) {
+	const vouchers = await fetchVouchers(dateISO, dateISO);
+	const opening = await getCashbookOpening(dateISO);
+	const daybookSide = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
+	const list = vouchers
+		.map((voucher) => {
+		// Filter to only bank and cash accounts
+		const instrumentRows = voucher.rows.filter((row) => row.account && (row.account.type === 'bank' || row.account.type === 'cash'));
+		if (!instrumentRows.length) {
+			return null;
+		}
+		
+		const debit = instrumentRows.reduce((sum, row) => sum + toNumber(row.dr), 0);
+		const credit = instrumentRows.reduce((sum, row) => sum + toNumber(row.cr), 0);
+		const amount = Math.max(debit, credit);
+		const side = daybookSide(voucher.vtype);
+		return {
+			id: voucher.id,
+			voucherNo: voucher.voucherNo,
+			vtype: voucher.vtype,
+			vdate: tzDate(voucher.vdate),
+			narration: voucher.narration,
+			rows: instrumentRows.map((row) => ({
+				id: row.id,
+				accountId: row.accountId,
+				account: row.account ? mapAccount(row.account) : undefined,
+				dr: toNumber(row.dr),
+				cr: toNumber(row.cr),
+				memo: row.memo,
+			})),
+			debit: side === 'debit' ? amount : 0,
+			credit: side === 'credit' ? amount : 0,
+		};
+		})
+		.filter((voucher): voucher is NonNullable<typeof voucher> => voucher !== null);
 	const totals = {
 		debit: list.reduce((sum, item) => sum + item.debit, 0),
 		credit: list.reduce((sum, item) => sum + item.credit, 0),

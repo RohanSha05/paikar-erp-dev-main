@@ -34,6 +34,25 @@ export async function getDaybook(req: Request, res: Response) {
 	return res.json({ success: true, data });
 }
 
+export async function getCashbook(req: Request, res: Response) {
+	const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+	const meta = await service.getReportMeta();
+	const effectiveDate = date || meta.latestVoucherDate;
+	if (!effectiveDate) {
+		return res.json({
+			success: true,
+			data: {
+				opening: 0,
+				closing: 0,
+				list: [],
+				totals: { debit: 0, credit: 0 },
+			},
+		});
+	}
+	const data = await service.getCashbook(effectiveDate);
+	return res.json({ success: true, data });
+}
+
 export async function getLedger(req: Request, res: Response) {
 	const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined;
 	if (!accountId) {

@@ -10,6 +10,7 @@ const router = Router();
 router.get('/accounts', requireAuth, controller.listAccounts);
 router.post('/accounts', requireAuth, requireRole(['ADMIN', 'OPERATOR']), validate(createAccountSchema), controller.createAccount);
 router.get('/daybook', requireAuth, controller.getDaybook);
+router.get('/cashbook', requireAuth, controller.getCashbook);
 router.get('/ledger', requireAuth, controller.getLedger);
 router.get('/trial-balance', requireAuth, controller.getTrialBalance);
 router.get('/expenses', requireAuth, controller.getExpenseSummary);

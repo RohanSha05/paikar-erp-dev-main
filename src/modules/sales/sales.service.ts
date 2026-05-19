@@ -1,9 +1,11 @@
+import bcrypt from 'bcrypt';
 import { Prisma, StockMoveReason, StockRefType } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { CreateSalesOrderInput, UpdateSalesOrderInput } from './sales.schema';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { syncLotMetaBagBalance } from '../../common/utils/lot-balance';
 
 async function soNo() {
   return nextDailySequenceIdForDelegate(prisma.salesOrder, 'soNo', 'SO');
@@ -101,11 +103,23 @@ async function verifyConfirmedSalesPassword(
   }) as { operationPass?: string | null } | null;
 
   const expectedPassword = String(businessInfo?.operationPass || '').trim();
-  if (!expectedPassword) {
-    throw new HttpError(500, 'Operation password is not configured');
+  let ok = false;
+
+  if (expectedPassword) {
+    ok = String(password).trim() === expectedPassword;
+  } else {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true }
+    });
+
+    if (!user?.passwordHash) {
+      throw new HttpError(500, 'No password is configured for the current user');
+    }
+
+    ok = await bcrypt.compare(String(password).trim(), user.passwordHash);
   }
 
-  const ok = String(password).trim() === expectedPassword;
   if (!ok) {
     throw new HttpError(401, `Incorrect password for confirmed sales ${action}`);
   }
@@ -134,55 +148,38 @@ async function reverseConfirmedSalesOrderImpact(
     );
   }
 
+  // Remove previous stock moves for this SO so they don't appear duplicated in reports.
   const prevMoves = await tx.stockMove.findMany({ where: { refType: StockRefType.SO, refId: order.id } });
-  for (const move of prevMoves) {
-    const qty = Number(move.qtyKg || 0);
-
-    await tx.stockMove.create({
-      data: {
-        moveNo: await stockMoveNo(tx),
-        lotId: move.lotId,
-        warehouseId: move.warehouseId,
-        qtyKg: new Prisma.Decimal(-qty),
-        reason: StockMoveReason.ADJUSTMENT,
-        refType: StockRefType.SO,
-        refId: order.id,
-        memo: `Reversal of ${move.moveNo} for SO ${order.soNo}`,
-        createdBy: userId,
-        lotLabel: move.lotLabel,
-      }
-    });
-
-    await tx.lot.update({
-      where: { id: move.lotId },
-      data: { availableKg: { increment: new Prisma.Decimal(Math.abs(qty)) } }
-    });
+  if (prevMoves.length) {
+    await tx.stockMove.deleteMany({ where: { refType: StockRefType.SO, refId: order.id } });
   }
 
-  const prevVouchers = await tx.voucher.findMany({ where: { salesOrderId: order.id }, include: { rows: true } });
-  for (const voucher of prevVouchers) {
-    const reversal = await tx.voucher.create({
-      data: {
-        voucherNo: await voucherNo(tx),
-        vtype: voucher.vtype,
-        vdate: new Date(),
-        narration: `Reversal of ${voucher.voucherNo} for SO ${order.soNo}`,
+  // Remove previous vouchers for this SO
+  await tx.voucherRow.deleteMany({
+    where: {
+      voucher: {
         salesOrderId: order.id,
-        status: 'POSTED'
+      },
+    },
+  });
+
+  await tx.voucher.deleteMany({ where: { salesOrderId: order.id } });
+
+  // Recalculate availableKg for affected lots after removing moves
+  for (const lotId of lotIds) {
+    const sumRow: any = await tx.stockMove.aggregate({
+      where: { lotId },
+      _sum: { qtyKg: true }
+    });
+    const computedAvailable = Number(sumRow._sum?.qtyKg || 0);
+    const currentMeta = await tx.lot.findUnique({ where: { id: lotId }, select: { meta: true } });
+    await tx.lot.update({
+      where: { id: lotId },
+      data: {
+        availableKg: new Prisma.Decimal(computedAvailable),
+        meta: syncLotMetaBagBalance(currentMeta?.meta as any, computedAvailable)
       }
     });
-
-    const reversalRows = voucher.rows.map((row) => ({
-      voucherId: reversal.id,
-      accountId: row.accountId,
-      dr: new Prisma.Decimal(Number(row.cr || 0)),
-      cr: new Prisma.Decimal(Number(row.dr || 0)),
-      memo: `Reversal of ${voucher.voucherNo}`,
-    }));
-
-    if (reversalRows.length) {
-      await tx.voucherRow.createMany({ data: reversalRows });
-    }
   }
 }
 
@@ -337,7 +334,13 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
         if (avail < qty) throw new HttpError(409, `Insufficient stock in lot ${lotRow.label}`);
 
         // deduct
-        await tx.lot.update({ where: { id: lotRow.id }, data: { availableKg: new Prisma.Decimal(avail - qty) } });
+        await tx.lot.update({
+          where: { id: lotRow.id },
+          data: {
+            availableKg: new Prisma.Decimal(avail - qty),
+            meta: syncLotMetaBagBalance((lotRow as any).meta, avail - qty)
+          }
+        });
 
         await tx.stockMove.create({ data: { moveNo: await stockMoveNo(tx), lotId: lotRow.id, warehouseId: lotRow.warehouseId, qtyKg: new Prisma.Decimal(-qty), reason: StockMoveReason.SALE, refType: StockRefType.SO, refId: id, memo: `Sale order ${existing.soNo} (edit)`, createdBy: userId, lotLabel: lotRow.label } });
 
@@ -414,9 +417,13 @@ export async function updateSalesOrderDraft(id: string, input: UpdateSalesOrderI
           _sum: { qtyKg: true }
         });
         const computedAvailable = Number(sumRow._sum?.qtyKg || 0);
+        const currentMeta = await tx.lot.findUnique({ where: { id: lotId }, select: { meta: true } });
         await tx.lot.update({
           where: { id: lotId },
-          data: { availableKg: new Prisma.Decimal(computedAvailable) }
+          data: {
+            availableKg: new Prisma.Decimal(computedAvailable),
+            meta: syncLotMetaBagBalance(currentMeta?.meta as any, computedAvailable)
+          }
         });
       }
 
@@ -579,7 +586,8 @@ export async function confirmSalesOrder(id: string, userId?: string) {
       await tx.lot.update({
         where: { id: lot.id },
         data: {
-          availableKg: new Prisma.Decimal(availableKg - qtyKg)
+          availableKg: new Prisma.Decimal(availableKg - qtyKg),
+          meta: syncLotMetaBagBalance((lot as any).meta, availableKg - qtyKg)
         }
       });
 

@@ -4,6 +4,7 @@ import { HttpError } from '../../common/httpError';
 import { CreatePurchaseOrderDraftInput, UpdatePurchaseOrderDraftInput } from './purchase.validator';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { syncLotMetaBagBalance } from '../../common/utils/lot-balance';
 
 const KG_PER_MON = 40;
 
@@ -838,10 +839,14 @@ await tx.voucher.deleteMany({
       _sum: { qtyKg: true }
     });
     const totalQty = Number(sumRow._sum?.qtyKg || 0);
+    const currentMeta = await tx.lot.findUnique({ where: { id: lotId }, select: { meta: true } });
 
     await tx.lot.update({
       where: { id: lotId },
-      data: { availableKg: new Prisma.Decimal(Math.max(0, totalQty)) }
+      data: {
+        availableKg: new Prisma.Decimal(Math.max(0, totalQty)),
+        meta: syncLotMetaBagBalance(currentMeta?.meta as any, Math.max(0, totalQty))
+      }
     });
   }
 }
@@ -960,7 +965,12 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
           sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount) }
+          meta: syncLotMetaBagBalance(
+            { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount), initialBagCount: Number(item.bagCount) },
+            stockKg,
+            Number(item.accountingKgPerBag),
+            Number(item.bagCount)
+          )
         },
       });
       lotId = existingLot.id;
@@ -985,7 +995,12 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
           avgCostPerKg: new Prisma.Decimal(avgCostPerKg),
           sourcePoId: po.id,
           sourcePoItemId: item.id,
-          meta: { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount) }
+          meta: syncLotMetaBagBalance(
+            { kgPerBag: Number(item.accountingKgPerBag), bagCount: Number(item.bagCount), initialBagCount: Number(item.bagCount) },
+            stockKg,
+            Number(item.accountingKgPerBag),
+            Number(item.bagCount)
+          )
         },
       });
       lotId = lot.id;
@@ -1111,7 +1126,14 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
       if (lotRow) {
         const old = Number(lotRow.availableKg || 0);
         if (Math.abs(old - sumQty) > 0.00001) {
-          await tx.lot.update({ where: { id: lid }, data: { availableKg: new Prisma.Decimal(sumQty) } });
+          const existingMeta = await tx.lot.findUnique({ where: { id: lid }, select: { meta: true } });
+          await tx.lot.update({
+            where: { id: lid },
+            data: {
+              availableKg: new Prisma.Decimal(sumQty),
+              meta: syncLotMetaBagBalance(existingMeta?.meta as any, sumQty)
+            }
+          });
           await tx.$executeRaw`
             UPDATE "PurchaseOrder" SET remarks = COALESCE(remarks, '') || ${`\n[RECONCILE] Lot ${lotRow.label || lid}: adjusted ${old} -> ${sumQty}`} WHERE id = ${po.id}
           `;
