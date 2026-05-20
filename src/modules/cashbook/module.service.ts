@@ -3,6 +3,7 @@ import { HttpError } from '../../common/httpError';
 import { PartyType } from '@prisma/client';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { toTitleCase } from '../../common/utils/voucher-narration';
 import { dhakaDayEnd, dhakaDayStart, tzDate, tzDateTime } from '../../common/utils/date';
 import type {
   AccountDto,
@@ -606,7 +607,7 @@ async function createVoucherRecord(
       voucherNo,
       vtype: input.vtype,
       vdate,
-      narration: input.narration || `${input.vtype} voucher`,
+      narration: input.narration?.trim() || toTitleCase(input.vtype),
       status,
       postedAt: status === 'POSTED' ? new Date() : null,
       locked: status === 'POSTED',
@@ -725,7 +726,7 @@ export async function listVouchers(
       },
     },
     orderBy: {
-      vdate: 'desc',
+      vdate: 'asc',
     },
   });
 
@@ -763,7 +764,7 @@ export async function updateDraftVoucher(
       data: {
         vtype: input.vtype,
         vdate,
-        narration: input.narration || `${input.vtype} voucher`,
+        narration: input.narration?.trim() || toTitleCase(input.vtype),
         postedAt: null,
         locked: false,
         rows: {

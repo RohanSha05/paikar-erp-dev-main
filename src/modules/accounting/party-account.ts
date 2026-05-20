@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { createAccount } from './module.service';
+import { prisma } from '../../db/prisma';
+import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 
 export type PartyAccountKind = 'seller' | 'customer' | 'driver' | 'investor' | 'employee' | 'party';
 
@@ -22,6 +24,19 @@ function normalizeToken(value: string) {
 		.replace(/^-+|-+$/g, '');
 }
 
+function kindAbbr(kind: string): string {
+	return kind
+		.trim()
+		.toUpperCase()
+		.slice(0, 3)
+		.replace(/[^A-Z0-9]+/g, '');
+}
+
+async function generatePartyAccountCode(kind: string): Promise<string> {
+	const prefix = `AC-${kindAbbr(kind)}`;
+	return nextDailySequenceIdForDelegate(prisma.account, 'code', prefix);
+}
+
 export function partyAccountCode(kind: string, refId: string) {
 	const safeKind = normalizeToken(kind || 'party') || 'PARTY';
 	const safeRef = normalizeToken(refId || 'unknown') || 'UNKNOWN';
@@ -39,7 +54,7 @@ export async function ensurePartyAccount(params: {
 }) {
   const kind = params.kind.trim().toLowerCase();
   const refId = params.refId.trim();
-  const code = params.code || `AC-${kind.toUpperCase()}-${refId}`.slice(0, 64);
+  const code = params.code || (await generatePartyAccountCode(kind));
 
   const openingDr = Number(params.openingDr ?? 0);
   const openingCr = Number(params.openingCr ?? 0);

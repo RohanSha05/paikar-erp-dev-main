@@ -21,6 +21,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import { HttpError } from '../../common/httpError';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { formatVoucherNarration } from '../../common/utils/voucher-narration';
 import { dhakaDayEnd, dhakaDayStart, tzDate, tzDateTime } from '../../common/utils/date';
 import type {
 	AccountDto,
@@ -120,7 +121,7 @@ async function getOpeningFromVouchers(accountId: string, beforeDate?: Date) {
 export async function getReportMeta(): Promise<ReportMetaDto> {
 	const latestVoucher = await prisma.voucher.findFirst({
     where: { status: 'POSTED' },
-		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
+		orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
 		select: { vdate: true },
 	});
 
@@ -165,8 +166,8 @@ async function fetchVouchers(startDate?: string, endDate?: string) {
 			},
 		},
 		orderBy: [
-			{ vdate: 'desc' },
-			{ createdAt: 'desc' },
+			{ vdate: 'asc' },
+			{ createdAt: 'asc' },
 		],
 	});
 }
@@ -443,22 +444,12 @@ async function postOpeningVoucher(
 				memo: 'Opening balance',
 			};
 
-	console.log('🔍 Creating opening balance voucher:', {
-		accountName: account.name,
-		amount: opening.amount,
-		side: opening.side,
-		rows: [
-			{ dr: accountRow.dr, cr: accountRow.cr },
-			{ dr: equityRow.dr, cr: equityRow.cr },
-		],
-	});
-
 	await tx.voucher.create({
 		data: {
 			voucherNo,
 			vtype: 'journal',
 			vdate: new Date(),
-			narration: `Opening balance — ${account.name}`,
+			narration: formatVoucherNarration('Opening balance', account.name, undefined, ' — '),
 			rows: {
 				create: [accountRow, equityRow],
 			},
@@ -536,7 +527,29 @@ export async function createAccount(input: CreateAccountInput): Promise<AccountD
 }
 
 export async function getDaybook(dateISO: string) {
-	const vouchers = await fetchVouchers(dateISO, dateISO);
+	// Fetch vouchers for the date ordered by voucherNo (ascending), then by vdate/createdAt
+	const where: Record<string, any> = {};
+	if (dateISO) {
+		where.vdate = {
+			gte: dhakaDayStart(dateISO),
+			lte: dhakaDayEnd(dateISO),
+		};
+	}
+
+	const vouchers = await prisma.voucher.findMany({
+		where: { ...where, status: 'POSTED' },
+		include: {
+			rows: {
+				include: { account: true },
+			},
+		},
+		orderBy: [
+			{ voucherNo: 'asc' },
+			{ vdate: 'asc' },
+			{ createdAt: 'asc' },
+		],
+	});
+
 	const opening = await getDaybookOpening(dateISO);
 	const daybookSide = (voucher: { vtype: string; narration?: string | null }) => {
 		if (voucher.vtype === 'payment') {
@@ -549,10 +562,11 @@ export async function getDaybook(dateISO: string) {
 
 		return 'debit';
 	};
+
 	const list = vouchers.map((voucher) => {
 		// Filter out rows with party accounts
 		const nonPartyRows = voucher.rows.filter((row) => row.account && row.account.type !== 'party');
-		
+        
 		const debit = nonPartyRows.reduce((sum, row) => sum + toNumber(row.dr), 0);
 		const credit = nonPartyRows.reduce((sum, row) => sum + toNumber(row.cr), 0);
 		const amount = Math.max(debit, credit);
@@ -590,7 +604,29 @@ export async function getDaybook(dateISO: string) {
 }
 
 export async function getCashbook(dateISO: string) {
-	const vouchers = await fetchVouchers(dateISO, dateISO);
+	// Fetch vouchers for the date ordered by voucherNo (ascending), then by vdate/createdAt
+	const where: Record<string, any> = {};
+	if (dateISO) {
+		where.vdate = {
+			gte: dhakaDayStart(dateISO),
+			lte: dhakaDayEnd(dateISO),
+		};
+	}
+
+	const vouchers = await prisma.voucher.findMany({
+		where: { ...where, status: 'POSTED' },
+		include: {
+			rows: {
+				include: { account: true },
+			},
+		},
+		orderBy: [
+			{ voucherNo: 'asc' },
+			{ vdate: 'asc' },
+			{ createdAt: 'asc' },
+		],
+	});
+
 	const opening = await getCashbookOpening(dateISO);
 	const daybookSide = (vtype: string) => (vtype === 'payment' ? 'credit' : 'debit');
 	const list = vouchers
@@ -707,7 +743,7 @@ export async function getTrialBalance(): Promise<TrialBalanceDto> {
 	const vouchers = await prisma.voucher.findMany({
 		where: { status: 'POSTED' },
 		include: { rows: true },
-		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
+		orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
 	});
 
 	const rows = await Promise.all(
@@ -767,7 +803,7 @@ export async function getExpenseSummary(year: number): Promise<ExpenseMonthSumma
 				include: { account: true },
 			},
 		},
-		orderBy: [{ vdate: 'desc' }, { createdAt: 'desc' }],
+		orderBy: [{ vdate: 'asc' }, { createdAt: 'asc' }],
 	});
 
 	const months = Array.from({ length: 12 }, (_, index) => ({

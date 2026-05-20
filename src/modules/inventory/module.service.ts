@@ -87,6 +87,80 @@ async function createInventoryVoucher(
 	return voucher;
 }
 
+function inventoryPurchaseRatePerKg(
+	rateBasis: string,
+	rateValue: number,
+	bagCount = 0,
+	stockKg = 0,
+) {
+	if (rateBasis === 'perKg') return rateValue;
+	if (rateBasis === 'perMon') return rateValue / 40;
+	return stockKg > 0 ? (bagCount * rateValue) / stockKg : 0;
+}
+
+function computeInventoryPurchaseTotals(order: any) {
+	const items = Array.isArray(order?.items) ? order.items : [];
+	const bagCostMode = order?.bagCostMode || 'paid';
+	const bagCostPerBag = Number(order?.bagCostPerBag || 0);
+	const transport = Number(order?.transport || 0);
+	const loadingUnloading = Number((order?.loadingUnloading ?? order?.loading) || 0);
+	const misc = Number(order?.misc || 0);
+	const headerExtraCosts = transport + loadingUnloading + misc;
+
+	let totalBags = 0;
+	let basePurchase = 0;
+	let totalStockKg = 0;
+
+	const rawLines: Array<{
+		bags: number;
+		stockKg: number;
+		baseCost: number;
+		rateBasis: string;
+		rateValue: number;
+	}> = items.map((item: any) => {
+		const bags = Number(item?.bagCount || 0);
+		const actualKg = bags * Number(item?.actualKgPerBag || 0);
+		const accountingKg = bags * Number(item?.accountingKgPerBag || 0);
+		const stockKg = item?.weightPolicy === 'actual' ? actualKg : accountingKg;
+		const rateBasis = String(item?.rateBasis || 'perMon');
+		const rateValue = Number(item?.rateValue || 0);
+		const baseCost = rateBasis === 'perBag'
+			? bags * rateValue
+			: stockKg * inventoryPurchaseRatePerKg(rateBasis, rateValue);
+
+		totalBags += bags;
+		totalStockKg += stockKg;
+		basePurchase += baseCost;
+
+		return {
+			bags,
+			stockKg,
+			baseCost,
+			rateBasis,
+			rateValue,
+		};
+	});
+
+	const bagCostTotal = bagCostMode === 'self' ? 0 : totalBags * bagCostPerBag;
+	const productSummaries = rawLines.map((line) => {
+		const bagCost = bagCostMode === 'self' ? 0 : totalBags > 0 ? (line.bags / totalBags) * bagCostTotal : 0;
+		const headerCostShare = totalStockKg > 0 ? headerExtraCosts * (line.stockKg / totalStockKg) : 0;
+		const lineCost = line.baseCost + bagCost + headerCostShare;
+		const avgPerKg = line.stockKg > 0 ? lineCost / line.stockKg : 0;
+
+		return {
+			...line,
+			bagCost,
+			headerCostShare,
+			lineCost,
+			avgPerKg,
+			avgPerMon: avgPerKg * 40,
+		};
+	});
+
+	return { productSummaries };
+}
+
 export async function adjustStock(input: AdjustStockInput) {
 	return prisma.$transaction(async (tx) => {
 		const lot = await tx.lot.findUnique({ where: { id: input.lotId } });
@@ -336,7 +410,7 @@ export async function getInventoryDashboard(query: InventoryDashboardQuery) {
 	};
 
 	const sortBy = query.sortBy || 'createdAt';
-	const sortDir = query.sortDir || 'desc';
+	const sortDir = query.sortDir || 'asc';
 
 	const [total, pageLots, aggregate, valueRows, grouped] = await Promise.all([
 		prisma.lot.count({ where }),
@@ -490,44 +564,55 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 				where: { id: { in: purchaseIds } },
 				select: {
 					id: true,
+					poNo: true,
+					seller: { select: { id: true, name: true } },
+					sellerSnapshot: true,
 					items: {
+						orderBy: { createdAt: 'asc' },
 						select: {
 							id: true,
 							bagCount: true,
+							productId: true,
+							productName: true,
+							actualKgPerBag: true,
+							accountingKgPerBag: true,
+							weightPolicy: true,
+							rateBasis: true,
+							rateValue: true,
 						},
 					},
 				}
 			})
-			: Promise.resolve([] as Array<{ id: string; items: Array<{ id: string; bagCount: number }> }>),
+			: Promise.resolve([] as Array<{ id: string; poNo: string; seller: { id: string; name: string }; sellerSnapshot: unknown; items: Array<{ id: string; bagCount: number; productId: string; productName: string | null; actualKgPerBag: number; accountingKgPerBag: number; weightPolicy: string; rateBasis: string; rateValue: number }> }>),
 		salesIds.length
 			? prisma.salesOrder.findMany({
 				where: { id: { in: salesIds } },
 				select: {
 					id: true,
+					soNo: true,
+					customer: { select: { id: true, name: true } },
+					customerSnapshot: true,
+					itemsSnapshot: true,
 					items: {
+						orderBy: { createdAt: 'asc' },
 						select: {
+							id: true,
 							lotId: true,
 							bagCount: true,
+							productId: true,
+							productType: true,
 						},
 					},
 				}
 			})
-			: Promise.resolve([] as Array<{ id: string; items: Array<{ lotId: string; bagCount: number }> }>)
+			: Promise.resolve([] as Array<{ id: string; soNo: string; customer: { id: string; name: string }; customerSnapshot: unknown; items: Array<{ id: string; lotId: string; bagCount: number; productId: string | null; productType: string }> }>)
 	]);
 
-	const purchaseBagCountByItemId = new Map<string, number>();
-	for (const order of purchaseOrders) {
-		for (const item of order.items) {
-			purchaseBagCountByItemId.set(item.id, Number(item.bagCount || 0));
-		}
-	}
-
-	const saleBagCountByLotId = new Map<string, number>();
-	for (const order of salesOrdersWithItems) {
-		for (const item of order.items) {
-			saleBagCountByLotId.set(item.lotId, Number(item.bagCount || 0));
-		}
-	}
+	const purchaseOrderById = new Map(purchaseOrders.map((order) => [order.id, order]));
+	const salesOrderById = new Map(salesOrdersWithItems.map((order) => [order.id, order]));
+	const purchaseCostBreakdownById = new Map(
+		purchaseOrders.map((order) => [order.id, computeInventoryPurchaseTotals(order)]),
+	);
 
 	const refFilter: Prisma.StockMoveWhereInput | undefined =
 		transactionType === 'purchase'
@@ -599,21 +684,6 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 		})
 	]);
 
-	const saleRowIds = rows.filter((row) => row.refType === 'SO').map((row) => row.refId);
-	const salesOrderHeaders = saleRowIds.length
-		? await prisma.salesOrder.findMany({
-			where: { id: { in: saleRowIds } },
-			select: {
-				id: true,
-				soNo: true,
-				customerId: true,
-				customer: { select: { id: true, name: true } },
-				customerSnapshot: true
-			}
-		})
-		: [];
-	const salesOrderById = Object.fromEntries(salesOrderHeaders.map((order) => [order.id, order]));
-
 	const purchaseRows = periodRows.filter((row) => row.refType === 'PO');
 	const saleRows = periodRows.filter((row) => row.refType === 'SO');
 
@@ -649,37 +719,70 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 
 	// (closing bag/mon will be computed from opening + purchased - sold below)
 
+	const rowSequenceByRef = new Map<string, number>();
 	const items = rows.map((m) => {
 		const qtyKg = Math.abs(toNumber(m.qtyKg));
-		const unitCost = toNumber(m.lot?.avgCostPerKg);
-		const totalPrice = qtyKg * unitCost;
+		const mon = qtyKg / 40;
 		const isPurchase = m.refType === 'PO';
-		const so = isPurchase ? null : salesOrderById[m.refId];
-		const po = m.lot?.sourcePo;
-		const bagCount = isPurchase
-			? purchaseBagCountByItemId.get(String(m.lot?.sourcePoItemId || '')) || 0
-			: saleBagCountByLotId.get(m.lotId) || 0;
+		const refKey = `${m.refType}:${m.refId}`;
+		const rowIndex = rowSequenceByRef.get(refKey) || 0;
+		rowSequenceByRef.set(refKey, rowIndex + 1);
+		const sourceOrder = isPurchase ? purchaseOrderById.get(m.refId) : salesOrderById.get(m.refId);
+		const sourceItems = sourceOrder?.items || [];
+		const sourceIndex = Math.max(0, sourceItems.length - 1 - rowIndex);
+		const sourceItem = sourceItems[sourceIndex];
+		const purchaseSummaries = isPurchase
+			? (purchaseCostBreakdownById.get(m.refId)?.productSummaries || [])
+			: [];
+		const saleSnapshots = !isPurchase
+			? ((sourceOrder as { itemsSnapshot?: Array<{ lineBase?: number }> } | undefined)?.itemsSnapshot || [])
+			: [];
+		const sellerName =
+			purchaseOrderById.get(m.refId)?.seller?.name ||
+			((purchaseOrderById.get(m.refId)?.sellerSnapshot as { name?: string } | null | undefined)?.name ?? '') ||
+			m.lot?.sourcePo?.seller?.name ||
+			'';
+		const customerName =
+			salesOrderById.get(m.refId)?.customer?.name ||
+			((salesOrderById.get(m.refId)?.customerSnapshot as { name?: string } | null | undefined)?.name ?? '') ||
+			'';
+		const bagCount = Number(sourceItem?.bagCount || 0);
+		const unitCost = isPurchase
+			? (() => {
+				const lineCost = Number(purchaseSummaries[sourceIndex]?.lineCost || 0);
+				return qtyKg > 0 && lineCost > 0 ? lineCost / qtyKg : toNumber(m.lot?.avgCostPerKg);
+			})()
+			: (() => {
+				const lineBase = Number(saleSnapshots[sourceIndex]?.lineBase || (sourceItem as { lineBase?: unknown } | undefined)?.lineBase || 0);
+				return qtyKg > 0 && lineBase > 0 ? lineBase / qtyKg : toNumber(m.lot?.avgCostPerKg);
+			})();
+		const totalPrice = isPurchase
+			? Number(purchaseSummaries[sourceIndex]?.lineCost || qtyKg * unitCost)
+			: Number(saleSnapshots[sourceIndex]?.lineBase || (sourceItem as { lineBase?: unknown } | undefined)?.lineBase || qtyKg * unitCost);
+		const productName = isPurchase
+			? String((sourceItem as { productName?: string | null } | undefined)?.productName || m.lot?.product?.name || '')
+			: String((sourceItem as { productType?: string } | undefined)?.productType || m.lot?.product?.name || '');
 
 		return {
 			id: m.id,
 			createdAt: m.createdAt,
 			transactionType: isPurchase ? 'purchase' : 'sale',
-			partyName: isPurchase ? po?.seller?.name : so?.customer?.name || (so?.customerSnapshot as { name?: string } | null | undefined)?.name,
-			poNo: po?.poNo,
-			soNo: so?.soNo,
-			sellerId: po?.sellerId,
-			sellerName: po?.seller?.name,
-			customerId: so?.customerId,
-			customerName: so?.customer?.name || (so?.customerSnapshot as { name?: string } | null | undefined)?.name,
+			partyName: isPurchase ? sellerName : customerName,
+			poNo: purchaseOrderById.get(m.refId)?.poNo,
+			soNo: salesOrderById.get(m.refId)?.soNo,
+			sellerId: purchaseOrderById.get(m.refId)?.seller?.id,
+			sellerName,
+			customerId: salesOrderById.get(m.refId)?.customer?.id,
+			customerName,
 			lotId: m.lotId,
 			lotLabel: m.lotLabel || m.lot?.label || '',
-			productId: m.lot?.productId || '',
-			productName: m.lot?.product?.name || '',
+			productId: String(sourceItem?.productId || m.lot?.productId || ''),
+			productName,
 			warehouseId: m.warehouseId,
 			warehouseName: m.warehouse?.name || '',
 			qtyKg,
 			bagCount,
-			mon: bagCount > 0 ? bagCount : qtyKg / 40,
+			mon,
 			unitCost,
 			totalPrice,
 			drKg: isPurchase ? qtyKg : 0,
@@ -713,6 +816,7 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 	const netQtyKg = totalInKg - totalOutKg;
 	const netAmount = periodTotals.totalDrAmount - periodTotals.totalCrAmount;
 	const netBagCount = Math.round(periodPurchasedBags) - Math.round(periodSoldBags);
+	const netMon = netQtyKg / 40;
 
 	return {
 		summary: {
@@ -729,7 +833,7 @@ export async function getInventoryReport(query: InventoryReportQuery) {
 			totalPurchasedBags: Math.round(periodPurchasedBags),
 			totalSoldBags: Math.round(periodSoldBags),
 			closingBagCount: netBagCount,
-			closingMon: netBagCount,
+			closingMon: netMon,
 			purchasedPrice: periodPurchasedPrice,
 			soldPrice: periodSoldPrice,
 			closingPriceByFlow: netAmount,

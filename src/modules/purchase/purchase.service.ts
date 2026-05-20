@@ -4,6 +4,7 @@ import { HttpError } from '../../common/httpError';
 import { CreatePurchaseOrderDraftInput, UpdatePurchaseOrderDraftInput } from './purchase.validator';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { formatVoucherNarration } from '../../common/utils/voucher-narration';
 import { syncLotMetaBagBalance } from '../../common/utils/lot-balance';
 
 const KG_PER_MON = 40;
@@ -362,7 +363,7 @@ async function postPurchaseAdvance(tx: any, po: any) {
       voucherNo: await voucherNo(tx),
       vtype: 'payment',
       vdate: new Date(),
-      narration: `Advance for PO ${po.poNo}`,
+      narration: formatVoucherNarration('Seller payment', po.seller.name, `PO ${po.poNo}`),
       purchaseOrderId: po.id,
       status: 'POSTED'
     },
@@ -1057,7 +1058,7 @@ async function applyApprovedPurchaseOrderImpact(tx: Prisma.TransactionClient, po
       voucherNo: await voucherNo(tx),
       vtype: 'journal',
       vdate: new Date(),
-      narration: `Auto purchase approval for ${po.poNo}${po.route ? ` - ${po.route}` : ''}`,
+      narration: formatVoucherNarration('Purchase approval', po.poNo, po.route || undefined),
       purchaseOrderId: po.id,
       status: 'POSTED'
     }

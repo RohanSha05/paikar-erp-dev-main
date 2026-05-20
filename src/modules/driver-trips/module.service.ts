@@ -5,6 +5,7 @@ import { CreateDriverTripInput, UpdateDriverTripInput } from './module.types';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import { parseDhakaDate } from '../../common/utils/date';
+import { formatVoucherNarration } from '../../common/utils/voucher-narration';
 
 function normalize(value?: string | null) {
 	if (value === null) return null;
@@ -126,7 +127,7 @@ async function postTripVoucher(
 			voucherNo: await generateVoucherNo(tx, trip.date),
 			vtype: 'journal',
 			vdate: trip.date,
-			narration: options?.memo || `Driver trip ${trip.id}`,
+			narration: formatVoucherNarration('Driver trip', trip.driverName || driver.name, options?.memo),
 			status: 'POSTED'
 		},
 	});

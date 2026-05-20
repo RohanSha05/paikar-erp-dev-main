@@ -5,6 +5,7 @@ import { HttpError } from '../../common/httpError';
 import { CreateSalesOrderInput, UpdateSalesOrderInput } from './sales.schema';
 import { ensurePartyAccount } from '../accounting/party-account';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
+import { formatVoucherNarration } from '../../common/utils/voucher-narration';
 import { syncLotMetaBagBalance } from '../../common/utils/lot-balance';
 
 async function soNo() {
@@ -664,7 +665,7 @@ export async function confirmSalesOrder(id: string, userId?: string) {
           voucherNo: await voucherNo(tx),
           vtype: 'journal',
           vdate: new Date(),
-          narration: `Sales order ${order.soNo}`,
+          narration: formatVoucherNarration('Customer receipt', customerAccount?.customer?.name || 'Customer', `SO ${order.soNo}`),
           salesOrderId: order.id,
           status: 'POSTED'
         },

@@ -4,6 +4,7 @@ import { ensurePartyAccount } from '../accounting/party-account';
 import { createVoucher } from '../cashbook/module.service';
 import { nextDailySequenceIdForDelegate } from '../../common/utils/sequence-id';
 import { parseDhakaDate } from '../../common/utils/date';
+import { formatVoucherNarration } from '../../common/utils/voucher-narration';
 
 export async function listInvestors(): Promise<Investor[]> {
   return prisma.investor.findMany({
@@ -168,8 +169,21 @@ export async function createInvestorTxn(data: {
   const voucher = await createVoucher({
     vtype: 'journal',
     vdate: data.date,
-    narration: `Investor ${data.kind}: ${memo} - ${investor.name}`,
-    rows: rows.map((row) => ({
+    narration: formatVoucherNarration(
+      `Investor ${
+        data.kind === 'capitalIn'
+          ? 'capital in'
+          : data.kind === 'capitalOut'
+            ? 'capital out'
+            : data.kind === 'profitPay'
+              ? 'profit pay'
+              : data.kind === 'adjustment'
+                ? 'adjustment'
+                : 'payout'
+      }`,
+      investor.name,
+    ),
+    rows: rows.map((row) => ({ 
       accountId: row.accountId,
       dr: row.dr,
       cr: row.cr,

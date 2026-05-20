@@ -309,15 +309,7 @@ function postOpeningVoucher(tx, account, opening) {
                 cr: new client_1.Prisma.Decimal(0),
                 memo: 'Opening balance',
             };
-        console.log('🔍 Creating opening balance voucher:', {
-            accountName: account.name,
-            amount: opening.amount,
-            side: opening.side,
-            rows: [
-                { dr: accountRow.dr, cr: accountRow.cr },
-                { dr: equityRow.dr, cr: equityRow.cr },
-            ],
-        });
+           
         yield tx.voucher.create({
             data: {
                 voucherNo,
