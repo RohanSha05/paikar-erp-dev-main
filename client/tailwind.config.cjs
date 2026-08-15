@@ -1,0 +1,2 @@
+/** @type {import('tailwindcss').Config} */
+module.exports={content:["./app/**/*.{ts,tsx}","./components/**/*.{ts,tsx}","./lib/**/*.{ts,tsx}"],theme:{extend:{colors:{brand:{DEFAULT:"#0E7C66",dark:"#0A5C4C",light:"#14A38A"},accent:{DEFAULT:"#F59E0B",dark:"#B45309",light:"#FBBF24"}},fontFamily:{sans:["Inter","Noto Sans Bengali","ui-sans-serif","system-ui","Segoe UI","Roboto"]}}},plugins:[require('@tailwindcss/forms')]};

@@ -1,0 +1,1 @@
+'use client';import {isAuthed} from '@/lib/auth';import {useEffect,useState} from 'react';import {useRouter} from 'next/navigation';export default function Protected({children}:{children:React.ReactNode}){const r=useRouter();const[s,setS]=useState(false);useEffect(()=>{if(!isAuthed()){r.replace('/login')}else{setS(true)}},[r]);if(!s)return null;return<>{children}</>}

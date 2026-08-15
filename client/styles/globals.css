@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;600;700&display=swap');
+
+:root { --surface: #F8FAFC; --card: #FFFFFF; --border: #E5E7EB; }
+html, body { @apply bg-[var(--surface)] text-slate-900; font-family: Inter, "Noto Sans Bengali", ui-sans-serif, system-ui; }
+.container-app { @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8; }
+.card { @apply bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 shadow-sm; }
+.btn { @apply inline-flex items-center justify-center rounded-lg border px-4 py-2 text-sm font-semibold transition; }
+.btn-primary { @apply bg-brand text-white border-brand hover:bg-brand-light; }
+.btn-ghost { @apply border-slate-200 bg-white text-slate-900 hover:bg-slate-50; }
+.input { @apply block w-full rounded-lg border-slate-300 focus:border-brand focus:ring-brand; }
+.label { @apply text-sm font-medium text-slate-700; }
+.table { @apply w-full text-left; }
+.table th { @apply text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200 pb-2; }
+.table td { @apply border-b border-slate-100 py-3; }
+.badge { @apply inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700; }
+.nav-link { @apply inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[15px] font-medium text-slate-700 hover:bg-slate-100; }
+.navbar { @apply sticky top-0 z-10 bg-white/70 backdrop-blur border-b border-slate-200; }
+.footer { @apply text-center text-xs text-slate-500 py-6; }
+.grid-2 { @apply grid grid-cols-1 md:grid-cols-2 gap-4; }
+.grid-3 { @apply grid grid-cols-1 md:grid-cols-3 gap-4; }
+.hstack { @apply flex items-center gap-3; }
+.vstack { @apply flex flex-col gap-3; }
+.sidebar { @apply w-64 shrink-0 border-r border-slate-200 bg-white/70 backdrop-blur; }
+
+/* Print Styles */
+@media print {
+	/* Hide layout elements */
+	.sidebar,
+	.footer,
+	.no-print,
+	nav,
+	[class*="nav-"],
+	[class*="header"],
+	button,
+	input[type="date"],
+	input[type="text"],
+	select,
+	.btn {
+		display: none !important;
+	}
+
+	/* Optimize for printing */
+	html,
+	body {
+		background: white;
+		margin: 0;
+		padding: 0;
+	}
+
+	main {
+		padding: 0;
+		margin: 0;
+	}
+
+	/* Ensure content takes full width */
+	.mx-auto {
+		max-width: 100%;
+		width: 100%;
+		margin: 0;
+	}
+
+	/* Print page settings */
+	@page {
+		size: A4;
+		margin: 10mm;
+	}
+}
+
